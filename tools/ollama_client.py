@@ -7,16 +7,21 @@ MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 
 CLIENT = Client(host=HOST)
 
-def llm_chat(system_prompt, history, message):
+def llm_chat(message, system_prompt=None, history=None):
+    messages = []
     if history is None:
         history = []
-    
+
+    messages = history.copy()
+
+    if system_prompt is not None:
+        messages.append({'role': 'system', 'content': system_prompt})
+
     response_content = ""
     
     response = CLIENT.chat(
         model=MODEL,
-        messages=history + [
-            {'role': 'system', 'content': system_prompt},
+        messages=messages + [
             {'role': 'user', 'content': message},
         ],
         stream=True
