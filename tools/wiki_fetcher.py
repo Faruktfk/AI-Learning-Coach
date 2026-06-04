@@ -90,7 +90,6 @@ DROP_SELECTORS = [
     ".toc",
 ]
 
-
 session = requests.Session()
 session.headers.update(
     {

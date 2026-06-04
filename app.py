@@ -1,6 +1,4 @@
-
 from core import state_machine
-
 
 while True:
 
@@ -8,6 +6,3 @@ while True:
    
    if user_input is not None and user_input.lower() == 'exit':
         break
-    
-    
-
