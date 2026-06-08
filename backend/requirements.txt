@@ -1,0 +1,14 @@
+beautifulsoup4
+fastapi
+httpcore
+httptools
+ollama
+pydantic
+pydantic_core
+python-dotenv
+PyYAML
+requests
+urllib3
+uvicorn
+watchfiles
+websockets

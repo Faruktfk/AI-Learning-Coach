@@ -1,3 +1,5 @@
+# BACKEND
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -15,12 +17,16 @@ __pycache__/
 # Operating system files
 .DS_Store
 
-# SQLite database and data directory
-data/
-progress.db
 
-# Streamlit cache
-.streamlit/
+# ----
 
-# Playground
-playground.ipynb
+# FRONTEND
+
+# Node modules
+node_modules/
+
+# Build output
+dist/
+
+# Logs
+logs/
