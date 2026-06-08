@@ -1,153 +1,135 @@
+from __future__ import annotations
+
 import random
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
-from uuid import uuid4
 
-from services.tools import ollama_client
-from services.tools import wiki_fetcher
-
-
-STATES = ["FETCH", "TEACH", "CHECK", "EVAL", "ADAPT", "HANDOUT"]
+from services.tools import ollama_client, wiki_fetcher
+from services.tools.handout_pdf import build_handout_filename, create_one_page_handout_pdf
 
 
-def _question_to_dict(question: Any) -> Dict[str, Any]:
-    """Convert a Pydantic question object or dict to a JSON-safe dict."""
-    if hasattr(question, "model_dump"):
-        return question.model_dump()
-    if isinstance(question, dict):
-        return dict(question)
-    return {
-        "question": getattr(question, "question", ""),
-        "true_option": getattr(question, "true_option", ""),
-        "distraction_option_1": getattr(question, "distraction_option_1", ""),
-        "distraction_option_2": getattr(question, "distraction_option_2", ""),
-        "distraction_option_3": getattr(question, "distraction_option_3", ""),
-        "answered_correctly": getattr(question, "answered_correctly", False),
-    }
+STATES = ["FETCH", "TEACH", "CHECK", "EVAL", "ADAPT", "HANDOUT", "FINISHED"]
 
 
-def _set_answered_correctly(question: Any, value: bool) -> None:
-    if isinstance(question, dict):
-        question["answered_correctly"] = value
-    else:
-        question.answered_correctly = value
-
-
-def _get_question_attr(question: Any, name: str) -> Any:
-    if isinstance(question, dict):
-        return question.get(name)
-    return getattr(question, name)
+@dataclass
+class StepResult:
+    session_id: str
+    state_before: str
+    state_after: str
+    message: str
+    requires_input: bool = False
+    input_kind: Optional[str] = None
+    data: Dict[str, Any] = field(default_factory=dict)
+    download_url: Optional[str] = None
+    session: Dict[str, Any] = field(default_factory=dict)
 
 
 class LearningSession:
     """
-    API-friendly wrapper around the existing CLI state-machine logic.
+    API-friendly wrapper around the existing learning logic.
 
-    Important:
-    - The learning decisions are intentionally kept equivalent to your CLI code.
-    - input()/print() are replaced by request/response fields.
-    - One instance represents one learning session.
+    The original CLI state machine is based on input()/print(). This class keeps
+    the same state flow and decision logic, but returns JSON-ready StepResult
+    objects instead of printing directly to the terminal.
     """
 
-    def __init__(self, session_id: Optional[str] = None):
-        self.session_id = session_id or str(uuid4())
-
+    def __init__(self) -> None:
+        self.session_id = str(uuid.uuid4())
         self.state_index = 0
         self.lesson_content: Optional[Dict[str, Any]] = None
         self.current_chunk_index = 0
-        self.chunk_questions: Optional[List[Any]] = None
+        self.chunk_questions = None
         self.chunk_test_tries = 0
-
-        # Extra API-only helper state. This does not change the learning logic;
-        # it only makes the CLI quiz usable from a REST UI.
-        self.current_quiz_options: Optional[List[List[str]]] = None
-        self.waiting_for_adapt_decision = False
-        self.done = False
+        self.latest_question_payload: List[Dict[str, Any]] = []
+        self.last_score: Optional[Dict[str, Any]] = None
+        self.handout_text: Optional[str] = None
+        self.handout_pdf_path: Optional[Path] = None
 
     def get_current_state(self) -> str:
         return STATES[self.state_index]
 
     def snapshot(self) -> Dict[str, Any]:
+        current_title = None
+        article_title = None
+        section_count = 0
+
+        if self.lesson_content is not None:
+            article_title = self.lesson_content.get("title")
+            section_count = len(self.lesson_content.get("sections", []))
+
+            if self.current_chunk_index < section_count:
+                current_title = self.lesson_content["sections"][self.current_chunk_index].get("title")
+
         return {
             "session_id": self.session_id,
             "current_state": self.get_current_state(),
-            "state_index": self.state_index,
             "current_chunk_index": self.current_chunk_index,
             "chunk_test_tries": self.chunk_test_tries,
-            "done": self.done,
-            "article_title": self.lesson_content["title"] if self.lesson_content else None,
-            "chunk_count": len(self.lesson_content["sections"]) if self.lesson_content else 0,
-            "current_chunk_title": self._current_chunk_title(),
-            "waiting_for_adapt_decision": self.waiting_for_adapt_decision,
+            "article_title": article_title,
+            "current_chunk_title": current_title,
+            "section_count": section_count,
+            "handout_ready": self.handout_pdf_path is not None,
         }
 
-    def step(self, input_message: Optional[str] = None, answers: Optional[List[int]] = None) -> Dict[str, Any]:
+    def initial_response(self) -> StepResult:
+        return self._result(
+            state_before="FETCH",
+            message=(
+                "Welches Thema möchtest du lernen? Bitte gib ein spezifisches Thema an, "
+                "z.B. 'Quantenphysik', 'Photosynthese' oder 'Renaissance Kunst'."
+            ),
+            requires_input=True,
+            input_kind="topic",
+        )
+
+    def step(self, message: Optional[str] = None, answers: Optional[List[int]] = None) -> StepResult:
         current_state = self.get_current_state()
 
         if current_state == "FETCH":
-            return self._fetch(input_message)
+            return self._handle_fetch(message)
 
         if current_state == "TEACH":
-            return self._teach()
+            return self._handle_teach()
 
         if current_state == "CHECK":
-            return self._check(input_message)
+            return self._handle_check(message)
 
         if current_state == "EVAL":
-            return self._eval(answers)
+            return self._handle_eval(answers)
 
         if current_state == "ADAPT":
-            return self._adapt(input_message)
+            return self._handle_adapt(message)
 
         if current_state == "HANDOUT":
-            return self._handout()
+            return self._handle_handout()
 
-        raise RuntimeError(f"Unknown state: {current_state}")
+        return self._result(
+            state_before=current_state,
+            message="Diese Lernsession ist bereits abgeschlossen.",
+            requires_input=False,
+            input_kind=None,
+            download_url=self._download_url(),
+        )
 
-    def _base_response(
-        self,
-        state_before: str,
-        message: str,
-        requires_input: bool = False,
-        input_kind: Optional[str] = None,
-        data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        return {
-            "session_id": self.session_id,
-            "state_before": state_before,
-            "state_after": self.get_current_state(),
-            "message": message,
-            "requires_input": requires_input,
-            "input_kind": input_kind,
-            "data": data or {},
-            "session": self.snapshot(),
-        }
-
-    def _fetch(self, input_message: Optional[str]) -> Dict[str, Any]:
+    def _handle_fetch(self, message: Optional[str]) -> StepResult:
         state_before = "FETCH"
 
-        if input_message is None or not input_message.strip():
-            return self._base_response(
-                state_before=state_before,
-                message=(
-                    "Welches Thema möchtest du lernen? Bitte gib ein spezifisches Thema an, "
-                    "z.B. 'Quantenphysik', 'Photosynthese' oder 'Renaissance Kunst'."
-                ),
-                requires_input=True,
-                input_kind="topic",
-            )
+        if message is None or not message.strip():
+            return self.initial_response()
 
-        user_input = input_message.strip()
+        user_input = message.strip()
+
         if user_input.lower() == "exit":
-            self.done = True
-            return self._base_response(
+            self.state_index = STATES.index("FINISHED")
+            return self._result(
                 state_before=state_before,
                 message="Lernassistent wird beendet. Auf Wiedersehen!",
-                data={"exit": True},
             )
 
-        # Same topic resolving logic as in your CLI state machine.
-        if len(user_input.strip().split(" ")) <= 3:
-            resolved_topic = user_input.strip()
+        if len(user_input.split(" ")) <= 3:
+            resolved_topic = user_input
         else:
             resolved_topic, _ = ollama_client.llm_chat(
                 system_prompt=(
@@ -156,74 +138,68 @@ class LearningSession:
                     "Benutzereingabe vage ist, versuche ein spezifisches Thema zu inferieren, das recherchiert und gelernt "
                     "werden kann. Gib nur das aufgelöste Thema ohne zusätzlichen Text zurück. DU DARFST KEINE ERKLÄRUNGEN "
                     "ODER ZUSÄTZLICHEN INFORMATIONEN GEBEN, NUR DAS AUFGELOSTE THEMENTITEL. DU DARFST AUßERDEM DEN "
-                    "THEMENTITEL AUCH NICHT IN EIGENEN WORTEN UMFORMULIEREN, WENN DER THEMENTITEL BEREITS SPEZIFISCH GENUG IST. "
-                    "WENN DIE BENUTZEREINGABE Z.B. 'QUANTENPHYSIK' IST, GIB 'QUANTENPHYSIK' ZURÜCK, NICHTS ANDERES."
+                    "THEMENTITEL AUCH NICHT IN EIGENEN WORTEN UMFORMULIEREN, WENN DER THEMENTITEL BEREITS SPEZIFISCH "
+                    "GENUG IST. WENN DIE BENUTZEREINGABE Z.B. 'QUANTENPHYSIK' IST, GIB 'QUANTENPHYSIK' ZURÜCK, NICHTS ANDERES."
                 ),
                 message=user_input,
                 print_response=False,
             )
+            resolved_topic = resolved_topic.strip()
 
         try:
             self.current_chunk_index = 0
-            self.lesson_content = wiki_fetcher.get_wikipedia_article(resolved_topic, lang="de")
-            self.chunk_questions = None
             self.chunk_test_tries = 0
-            self.current_quiz_options = None
-            self.waiting_for_adapt_decision = False
+            self.chunk_questions = None
+            self.latest_question_payload = []
+            self.lesson_content = wiki_fetcher.get_wikipedia_article(resolved_topic, lang="de")
 
-            chunk_titles = [section["title"] for section in self.lesson_content["sections"]]
+            chunk_titles = " | ".join(section["title"] for section in self.lesson_content["sections"])
+
             self.state_index = STATES.index("TEACH")
-
-            return self._base_response(
+            return self._result(
                 state_before=state_before,
                 message=(
                     f"Aufgelöstes Thema: {resolved_topic}\n\n"
                     f"Gelesener Wikipedia-Artikel: {self.lesson_content['title']}\n\n"
-                    "Der Lernassistent wird nun mit dem ersten Abschnitt beginnen. Viel Erfolg beim Lernen!"
+                    f"Artikel in folgende Abschnitte unterteilt:\n{chunk_titles}\n\n"
+                    "Der Lernassistent beginnt nun mit dem ersten Abschnitt. Viel Erfolg beim Lernen!"
                 ),
                 data={
                     "resolved_topic": resolved_topic,
                     "article_title": self.lesson_content["title"],
-                    "chunk_titles": chunk_titles,
-                    "chunk_count": len(chunk_titles),
+                    "chunk_titles": [section["title"] for section in self.lesson_content["sections"]],
                 },
             )
-        except Exception as e:
-            return self._base_response(
+        except Exception as exc:
+            self.state_index = STATES.index("FETCH")
+            return self._result(
                 state_before=state_before,
                 message=(
-                    f"Fehler beim Abrufen des Wikipedia-Artikels: {e}\n\n"
+                    f"Fehler beim Abrufen des Wikipedia-Artikels: {exc}\n\n"
                     "Bitte versuche es erneut mit einem anderen Thema oder überprüfe deine Internetverbindung."
                 ),
                 requires_input=True,
                 input_kind="topic",
-                data={"error": str(e)},
             )
 
-    def _teach(self) -> Dict[str, Any]:
+    def _handle_teach(self) -> StepResult:
         state_before = "TEACH"
 
         if self.lesson_content is None:
             self.state_index = STATES.index("FETCH")
-            return self._base_response(
-                state_before=state_before,
-                message="Es wurde noch kein Artikel geladen. Bitte gib zuerst ein Thema an.",
-                requires_input=True,
-                input_kind="topic",
-            )
+            return self.initial_response()
 
-        # Same logic as CLI: if no more chunks are available, go to HANDOUT.
         if self.current_chunk_index >= len(self.lesson_content["sections"]):
             self.current_chunk_index = 0
             self.state_index = STATES.index("HANDOUT")
-            return self._base_response(
+            return self._result(
                 state_before=state_before,
                 message="Alle Abschnitte des Artikels wurden durchgearbeitet.",
             )
 
         point_of_focus = None
         if self.chunk_questions is not None:
-            questions = ", ".join([_get_question_attr(item, "question") for item in self.chunk_questions])
+            questions = ", ".join([item.question for item in self.chunk_questions])
             point_of_focus = [
                 {
                     "role": "user",
@@ -235,7 +211,7 @@ class LearningSession:
                 }
             ]
 
-        current_section = self.lesson_content["sections"][self.current_chunk_index]
+        section = self.lesson_content["sections"][self.current_chunk_index]
         chunk_summary, _ = ollama_client.llm_chat(
             system_prompt=(
                 "Du bist ein hilfreicher Lernassistent, der die folgenden Informationen in einfachen Worten zusammenfasst, "
@@ -245,60 +221,50 @@ class LearningSession:
                 "DER INFORMATIONEN, DIE IN EINFACHEN WORTEN FORMULIERT IST, DAMIT EIN SCHÜLER SIE VERSTEHEN KANN. "
                 "DIE LÄNGE DER ZUSAMMENFASSUNG SOLL MINIMAL 10 UND MAXIMAL 20 SÄTZE BETRAGEN."
             ),
-            message=current_section["content"],
+            message=section["content"],
             history=point_of_focus,
             print_response=False,
         )
-        current_section["summary"] = chunk_summary
+        section["summary"] = chunk_summary
 
         self.state_index = STATES.index("CHECK")
-
-        return self._base_response(
+        return self._result(
             state_before=state_before,
-            message=chunk_summary,
+            message=f"{self.current_chunk_index + 1}. {section['title'].upper()}\n\n{chunk_summary}",
             data={
                 "chunk_index": self.current_chunk_index,
-                "chunk_number": self.current_chunk_index + 1,
-                "chunk_title": current_section["title"],
+                "chunk_title": section["title"],
                 "summary": chunk_summary,
             },
         )
 
-    def _check(self, input_message: Optional[str]) -> Dict[str, Any]:
+    def _handle_check(self, message: Optional[str]) -> StepResult:
         state_before = "CHECK"
 
-        if self.lesson_content is None:
-            self.state_index = STATES.index("FETCH")
-            return self._base_response(
+        if message is None or not message.strip():
+            section_title = self._current_section_title()
+            return self._result(
                 state_before=state_before,
-                message="Es wurde noch kein Artikel geladen. Bitte gib zuerst ein Thema an.",
-                requires_input=True,
-                input_kind="topic",
-            )
-
-        if input_message is None or not input_message.strip():
-            return self._base_response(
-                state_before=state_before,
-                message=f"Möchtest du den Test für den Abschnitt {self.current_chunk_index + 1} starten? (ja/nein)",
+                message=f"Möchtest du den Test für den Abschnitt {self.current_chunk_index + 1} ({section_title}) starten?",
                 requires_input=True,
                 input_kind="start_test_decision",
+                data={"options": ["ja", "nein"]},
             )
 
-        user_input = input_message.strip().lower()
+        user_input = message.strip().lower()
+
         if user_input == "nein":
             self.chunk_test_tries = 0
             self.chunk_questions = None
-            self.current_quiz_options = None
+            self.latest_question_payload = []
             self.current_chunk_index += 1
             self.state_index = STATES.index("TEACH")
-
-            return self._base_response(
+            return self._result(
                 state_before=state_before,
                 message="Okay, der Test wird übersprungen.",
-                data={"skipped_test": True},
             )
 
-        current_section = self.lesson_content["sections"][self.current_chunk_index]
+        section = self.lesson_content["sections"][self.current_chunk_index]
         self.chunk_questions, _ = ollama_client.llm_chat(
             system_prompt=(
                 "Du bist ein hilfreicher Lernassistent, der basierend auf den folgenden Informationen 3 bis 8 "
@@ -311,255 +277,299 @@ class LearningSession:
                 "Antwortoption). GIB NUR DIE FRAGEN IM ANGEGEBENEN JSON-FORMAT ZURÜCK, OHNE ZUSÄTZLICHE ERKLÄRUNGEN "
                 "ODER INFORMATIONEN."
             ),
-            message=current_section["summary"],
+            message=section["summary"],
             question_format_on=True,
             print_response=False,
         )
 
-        self.current_quiz_options = []
-        public_questions = []
-        for index, question in enumerate(self.chunk_questions):
-            options = [
-                _get_question_attr(question, "true_option"),
-                _get_question_attr(question, "distraction_option_1"),
-                _get_question_attr(question, "distraction_option_2"),
-                _get_question_attr(question, "distraction_option_3"),
-            ]
-            random.shuffle(options)
-            self.current_quiz_options.append(options)
-            public_questions.append(
-                {
-                    "id": index + 1,
-                    "question": _get_question_attr(question, "question"),
-                    "options": [
-                        {"id": option_index + 1, "text": option}
-                        for option_index, option in enumerate(options)
-                    ],
-                }
-            )
-
+        self.latest_question_payload = self._build_question_payload()
         self.state_index = STATES.index("EVAL")
 
-        return self._base_response(
+        return self._result(
             state_before=state_before,
-            message="Der Test wurde generiert. Bitte beantworte die Fragen.",
+            message=f"Der Test für Abschnitt {self.current_chunk_index + 1} ist bereit. Beantworte die Fragen nacheinander.",
             requires_input=True,
             input_kind="quiz_answers",
             data={
                 "chunk_index": self.current_chunk_index,
-                "chunk_title": current_section["title"],
-                "questions": public_questions,
+                "chunk_title": section["title"],
+                "tries": self.chunk_test_tries,
+                "questions": self.latest_question_payload,
             },
         )
 
-    def _eval(self, answers: Optional[List[int]]) -> Dict[str, Any]:
+    def _handle_eval(self, answers: Optional[List[int]]) -> StepResult:
         state_before = "EVAL"
 
-        if self.chunk_questions is None or self.current_quiz_options is None:
+        if not answers:
+            return self._result(
+                state_before=state_before,
+                message="Bitte beantworte zuerst die Testfragen.",
+                requires_input=True,
+                input_kind="quiz_answers",
+                data={"questions": self.latest_question_payload},
+            )
+
+        if self.chunk_questions is None:
             self.state_index = STATES.index("CHECK")
-            return self._base_response(
+            return self._result(
                 state_before=state_before,
-                message="Es wurden noch keine Fragen generiert.",
-                requires_input=True,
-                input_kind="start_test_decision",
+                message="Es sind keine Testfragen vorhanden. Der Test wird neu vorbereitet.",
             )
 
-        if answers is None:
-            return self._base_response(
-                state_before=state_before,
-                message="Bitte sende deine Antworten als Liste von Optionsnummern, z.B. [1, 3, 2, 4].",
-                requires_input=True,
-                input_kind="quiz_answers",
-            )
-
-        if len(answers) != len(self.chunk_questions):
-            return self._base_response(
-                state_before=state_before,
-                message=f"Es werden genau {len(self.chunk_questions)} Antworten erwartet.",
-                requires_input=True,
-                input_kind="quiz_answers",
-                data={"expected_answer_count": len(self.chunk_questions), "received_answer_count": len(answers)},
-            )
-
+        correct_count = 0
         results = []
+
         for index, question in enumerate(self.chunk_questions):
-            options = self.current_quiz_options[index]
-            answer_number = answers[index]
-
-            is_correct = False
+            selected_option_id = answers[index] if index < len(answers) else None
+            payload_question = self.latest_question_payload[index]
             selected_option = None
-            try:
-                selected_option = options[int(answer_number) - 1]
-                is_correct = selected_option == _get_question_attr(question, "true_option")
-            except (ValueError, TypeError, IndexError):
-                is_correct = False
 
-            _set_answered_correctly(question, is_correct)
+            for option in payload_question["options"]:
+                if option["id"] == selected_option_id:
+                    selected_option = option
+                    break
+
+            is_correct = selected_option is not None and selected_option["text"] == question.true_option
+            question.answered_correctly = is_correct
+            if is_correct:
+                correct_count += 1
+
             results.append(
                 {
-                    "id": index + 1,
-                    "question": _get_question_attr(question, "question"),
-                    "selected_option": selected_option,
-                    "correct_option": _get_question_attr(question, "true_option"),
+                    "question_id": index + 1,
+                    "question": question.question,
+                    "selected_option_id": selected_option_id,
+                    "selected_option_text": selected_option["text"] if selected_option else None,
+                    "true_option": question.true_option,
                     "answered_correctly": is_correct,
                 }
             )
 
+        total = len(self.chunk_questions)
+        correct_percentage = correct_count / total if total else 0
+        self.last_score = {
+            "correct_count": correct_count,
+            "total": total,
+            "correct_percentage": correct_percentage,
+            "results": results,
+        }
+
         self.state_index = STATES.index("ADAPT")
 
-        count_correct = sum(1 for result in results if result["answered_correctly"])
-        total = len(results)
-
-        return self._base_response(
+        return self._result(
             state_before=state_before,
-            message=f"Du hast {count_correct} von {total} Fragen richtig beantwortet.",
-            data={
-                "results": results,
-                "count_correct": count_correct,
-                "total": total,
-                "correct_percentage": count_correct / total if total else 0,
-            },
+            message=f"Du hast {correct_count} von {total} Fragen richtig beantwortet. ({correct_percentage:.2%})",
+            data=self.last_score,
         )
 
-    def _adapt(self, input_message: Optional[str]) -> Dict[str, Any]:
+    def _handle_adapt(self, message: Optional[str]) -> StepResult:
         state_before = "ADAPT"
 
-        if not self.chunk_questions:
-            self.state_index = STATES.index("TEACH")
-            return self._base_response(
+        if self.last_score is None:
+            self.state_index = STATES.index("CHECK")
+            return self._result(
                 state_before=state_before,
-                message="Keine Testfragen vorhanden. Weiter zum nächsten Schritt.",
+                message="Es liegt noch keine Auswertung vor. Der Test wird neu vorbereitet.",
             )
 
-        # If the third-failure decision was already requested, process the user's decision here.
-        if self.waiting_for_adapt_decision:
-            if input_message is None or not input_message.strip():
-                return self._base_response(
-                    state_before=state_before,
-                    message="Möchtest du den Abschnitt nochmals versuchen oder zum nächsten Abschnitt übergehen? (nochmal/skip)",
-                    requires_input=True,
-                    input_kind="adapt_decision",
-                )
-
-            user_input = input_message.strip().lower()
-            self.waiting_for_adapt_decision = False
-
-            if user_input == "skip":
-                self.chunk_test_tries = 0
-                self.chunk_questions = None
-                self.current_quiz_options = None
-                self.current_chunk_index += 1
-                self.state_index = STATES.index("TEACH")
-
-                return self._base_response(
-                    state_before=state_before,
-                    message="Okay, lass uns zum nächsten Abschnitt übergehen.",
-                    data={"decision": "skip"},
-                )
-
-            self.state_index = STATES.index("TEACH")
-            return self._base_response(
-                state_before=state_before,
-                message="Okay, lass es uns nochmals durchgehen.",
-                data={"decision": "repeat"},
-            )
-
-        count_correct = sum(bool(_get_question_attr(q, "answered_correctly")) for q in self.chunk_questions)
-        correct_percentage = count_correct / len(self.chunk_questions) if self.chunk_questions else 0
-        self.state_index = STATES.index("TEACH")
+        correct_percentage = self.last_score["correct_percentage"]
 
         if correct_percentage < 0.5:
-            self.chunk_test_tries += 1
-            self.chunk_questions = [q for q in self.chunk_questions if not bool(_get_question_attr(q, "answered_correctly"))]
-            self.current_quiz_options = None
-
-            if self.chunk_test_tries < 3:
-                return self._base_response(
+            # Third or later try: old CLI asked immediately for nochmal/skip.
+            if self.chunk_test_tries >= 3 and (message is None or not message.strip()):
+                return self._result(
                     state_before=state_before,
                     message=(
-                        f"Du hast {count_correct} von {len(self.chunk_questions) + count_correct} Fragen richtig beantwortet. "
-                        "Es scheint, dass du Schwierigkeiten mit diesem Abschnitt hast. Lass es uns nochmals durchgehen "
-                        "und versuchen, die Informationen besser zu verstehen."
+                        "Es scheint, dass du Schwierigkeiten mit diesem Abschnitt hast. Es ist in Ordnung.\n\n"
+                        "Möchtest du den Abschnitt nochmals versuchen oder zum nächsten Abschnitt übergehen?"
                     ),
-                    data={
-                        "count_correct": count_correct,
-                        "correct_percentage": correct_percentage,
-                        "next_action": "repeat_chunk",
-                    },
+                    requires_input=True,
+                    input_kind="adapt_decision",
+                    data={"options": ["nochmal", "skip"]},
                 )
 
-            self.waiting_for_adapt_decision = True
-            self.state_index = STATES.index("ADAPT")
-            return self._base_response(
+            # If user responded to the third-try decision.
+            if self.chunk_test_tries >= 3 and message is not None:
+                user_input = message.strip().lower()
+                if user_input == "skip":
+                    self.chunk_test_tries = 0
+                    self.chunk_questions = None
+                    self.latest_question_payload = []
+                    self.current_chunk_index += 1
+                    self.state_index = STATES.index("TEACH")
+                    return self._result(
+                        state_before=state_before,
+                        message="Okay, lass uns zum nächsten Abschnitt übergehen.",
+                    )
+
+                self.state_index = STATES.index("TEACH")
+                return self._result(
+                    state_before=state_before,
+                    message="Okay, lass es uns nochmals durchgehen.",
+                )
+
+            self.chunk_test_tries += 1
+            self.chunk_questions = [q for q in self.chunk_questions if not q.answered_correctly]
+            self.latest_question_payload = []
+
+            if self.chunk_test_tries < 3:
+                self.state_index = STATES.index("TEACH")
+                return self._result(
+                    state_before=state_before,
+                    message=(
+                        "Es scheint, dass du Schwierigkeiten mit diesem Abschnitt hast. "
+                        "Lass es uns nochmals durchgehen und versuchen, die Informationen besser zu verstehen."
+                    ),
+                )
+
+            return self._result(
                 state_before=state_before,
                 message=(
-                    f"Du hast {count_correct} Fragen richtig beantwortet. Es scheint, dass du Schwierigkeiten mit diesem "
-                    "Abschnitt hast. Es ist in Ordnung. Möchtest du den Abschnitt nochmals versuchen oder zum nächsten "
-                    "Abschnitt übergehen? (nochmal/skip)"
+                    "Es scheint, dass du Schwierigkeiten mit diesem Abschnitt hast. Es ist in Ordnung.\n\n"
+                    "Möchtest du den Abschnitt nochmals versuchen oder zum nächsten Abschnitt übergehen?"
                 ),
                 requires_input=True,
                 input_kind="adapt_decision",
-                data={
-                    "count_correct": count_correct,
-                    "correct_percentage": correct_percentage,
-                    "next_action": "ask_repeat_or_skip",
-                },
+                data={"options": ["nochmal", "skip"]},
             )
 
         self.chunk_test_tries = 0
         self.chunk_questions = None
-        self.current_quiz_options = None
+        self.latest_question_payload = []
         self.current_chunk_index += 1
+        self.state_index = STATES.index("TEACH")
 
-        return self._base_response(
+        return self._result(
             state_before=state_before,
             message="Gut gemacht! Lass uns zum nächsten Abschnitt übergehen.",
-            data={
-                "count_correct": count_correct,
-                "correct_percentage": correct_percentage,
-                "next_action": "next_chunk",
-            },
         )
 
-    def _handout(self) -> Dict[str, Any]:
+    def _handle_handout(self) -> StepResult:
         state_before = "HANDOUT"
-        self.done = True
-        return self._base_response(
+
+        if self.lesson_content is None:
+            self.state_index = STATES.index("FETCH")
+            return self.initial_response()
+
+        if self.handout_pdf_path is None:
+            self.handout_text = self._generate_handout_text()
+            self.handout_pdf_path = build_handout_filename(self.session_id, self.lesson_content["title"])
+            create_one_page_handout_pdf(
+                title=self.lesson_content["title"],
+                handout_text=self.handout_text,
+                output_path=self.handout_pdf_path,
+            )
+
+        self.state_index = STATES.index("FINISHED")
+        return self._result(
             state_before=state_before,
             message=(
                 "HERZLICHEN GLÜCKWUNSCH! DU HAST ALLE ABSCHNITTE DURCHGEARBEITET!\n\n"
-                "Handout-State ist noch nicht implementiert."
+                "Dein Handout wurde als PDF generiert und steht jetzt zum Download bereit."
             ),
-            data={"handout": None},
+            data={"handout_text": self.handout_text},
+            download_url=self._download_url(),
         )
 
-    def _current_chunk_title(self) -> Optional[str]:
+    def _generate_handout_text(self) -> str:
+        assert self.lesson_content is not None
+
+        summaries = []
+        for section in self.lesson_content["sections"]:
+            summary = section.get("summary")
+            if summary:
+                summaries.append(f"## {section['title']}\n{summary}")
+
+        source_text = "\n\n".join(summaries)
+
+        if not source_text.strip():
+            source_text = "\n\n".join(
+                f"## {section['title']}\n{section['content'][:900]}"
+                for section in self.lesson_content["sections"]
+            )
+
+        try:
+            handout, _ = ollama_client.llm_chat(
+                system_prompt=(
+                    "Du bist ein hilfreicher Lernassistent. Erstelle ein kompaktes, gut strukturiertes Lern-Handout "
+                    "auf Deutsch. Das Handout soll maximal eine PDF-Seite lang sein. Nutze kurze Überschriften und "
+                    "Bulletpoints. Konzentriere dich auf die wichtigsten Begriffe, Zusammenhänge und Merksätze. "
+                    "Gib nur den Handout-Text zurück, ohne Zusatzkommentar."
+                ),
+                message=(
+                    f"Artikel: {self.lesson_content['title']}\n\n"
+                    f"Zusammenfassungen der bearbeiteten Abschnitte:\n\n{source_text}"
+                ),
+                print_response=False,
+            )
+            return handout.strip()
+        except Exception:
+            return self._fallback_handout_text(source_text)
+
+    def _fallback_handout_text(self, source_text: str) -> str:
+        assert self.lesson_content is not None
+        lines = [f"# {self.lesson_content['title']}", "", "Wichtigste Punkte:"]
+        for section in self.lesson_content["sections"][:8]:
+            summary = section.get("summary") or section.get("content", "")[:350]
+            summary = " ".join(summary.split())
+            lines.append(f"- {section['title']}: {summary[:220]}")
+        return "\n".join(lines)
+
+    def _build_question_payload(self) -> List[Dict[str, Any]]:
+        payload = []
+
+        for index, question in enumerate(self.chunk_questions or [], start=1):
+            options = [
+                question.true_option,
+                question.distraction_option_1,
+                question.distraction_option_2,
+                question.distraction_option_3,
+            ]
+            random.shuffle(options)
+
+            payload.append(
+                {
+                    "id": index,
+                    "question": question.question,
+                    "options": [
+                        {"id": option_index, "text": option_text}
+                        for option_index, option_text in enumerate(options, start=1)
+                    ],
+                }
+            )
+
+        return payload
+
+    def _current_section_title(self) -> str:
         if self.lesson_content is None:
-            return None
+            return ""
         if self.current_chunk_index >= len(self.lesson_content["sections"]):
-            return None
+            return ""
         return self.lesson_content["sections"][self.current_chunk_index]["title"]
 
+    def _download_url(self) -> Optional[str]:
+        if self.handout_pdf_path is None:
+            return None
+        return f"/sessions/{self.session_id}/handout.pdf"
 
-class SessionStore:
-    """Simple in-memory session store for the MVP REST API."""
-
-    def __init__(self):
-        self._sessions: Dict[str, LearningSession] = {}
-
-    def create(self) -> LearningSession:
-        session = LearningSession()
-        self._sessions[session.session_id] = session
-        return session
-
-    def get(self, session_id: str) -> LearningSession:
-        if session_id not in self._sessions:
-            raise KeyError(session_id)
-        return self._sessions[session_id]
-
-    def delete(self, session_id: str) -> None:
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-
-    def list(self) -> List[Dict[str, Any]]:
-        return [session.snapshot() for session in self._sessions.values()]
+    def _result(
+        self,
+        state_before: str,
+        message: str,
+        requires_input: bool = False,
+        input_kind: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+        download_url: Optional[str] = None,
+    ) -> StepResult:
+        return StepResult(
+            session_id=self.session_id,
+            state_before=state_before,
+            state_after=self.get_current_state(),
+            message=message,
+            requires_input=requires_input,
+            input_kind=input_kind,
+            data=data or {},
+            download_url=download_url,
+            session=self.snapshot(),
+        )

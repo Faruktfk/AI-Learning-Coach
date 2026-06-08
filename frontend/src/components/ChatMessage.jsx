@@ -1,53 +1,71 @@
+import { useEffect, useMemo, useState } from 'react';
 import { Bot, User } from 'lucide-react';
 
-function renderText(text) {
-  if (!text) return null;
+function useTypewriter(text, enabled, onDone) {
+  const words = useMemo(() => String(text || '').split(/(\s+)/), [text]);
+  const [visibleIndex, setVisibleIndex] = useState(enabled ? 0 : words.length);
 
-  return text.split('\n').map((line, index) => (
-    <span key={index}>
-      {line}
-      {index < text.split('\n').length - 1 && <br />}
-    </span>
-  ));
+  useEffect(() => {
+    if (!enabled) {
+      setVisibleIndex(words.length);
+      return;
+    }
+
+    setVisibleIndex(0);
+    let index = 0;
+
+    const interval = window.setInterval(() => {
+      index += 1;
+      setVisibleIndex(index);
+
+      if (index >= words.length) {
+        window.clearInterval(interval);
+        onDone?.();
+      }
+    }, 22);
+
+    return () => window.clearInterval(interval);
+  }, [enabled, words.length, text]);
+
+  return words.slice(0, visibleIndex).join('');
 }
 
-export default function ChatMessage({ message }) {
-  const isAssistant = message.role === 'assistant';
+export default function ChatMessage({ message, onAnimationDone}) {
+  const isUser = message.role === 'user';
+  const shouldType = message.role === 'assistant' && message.stream === true;
+  const visibleContent = useTypewriter(message.content, shouldType, onAnimationDone);
 
   return (
-    <div className={`flex w-full gap-4 px-4 py-6 ${isAssistant ? 'bg-white' : 'bg-gray-50'}`}>
-      <div className="mx-auto flex w-full max-w-3xl gap-4">
+    <div className={`group w-full ${isUser ? 'bg-transparent' : 'bg-white dark:bg-zinc-900'}`}>
+      <div className="mx-auto flex w-full max-w-3xl gap-4 px-4 py-5">
         <div
-          className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-            isAssistant ? 'bg-gray-900 text-white' : 'bg-gray-200 text-gray-700'
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+            isUser
+              ? 'bg-zinc-800 text-white dark:bg-zinc-200 dark:text-zinc-900'
+              : 'bg-emerald-600 text-white'
           }`}
         >
-          {isAssistant ? <Bot size={17} /> : <User size={17} />}
+          {isUser ? <User size={17} /> : <Bot size={17} />}
         </div>
 
-        <div className="min-w-0 flex-1">
-          {message.title && (
-            <div className="mb-2 text-sm font-semibold text-gray-900">{message.title}</div>
-          )}
-          <div className="whitespace-pre-wrap text-[15px] leading-7 text-gray-900">
-            {renderText(message.content)}
-          </div>
+        <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[15px] leading-7 text-zinc-900 dark:text-zinc-100">
+          {visibleContent}
+          {shouldType && visibleContent.length < String(message.content || '').length ? (
+            <span className="ml-0.5 inline-block h-4 w-1 animate-pulse rounded bg-zinc-700 align-middle dark:bg-zinc-200" />
+          ) : null}
 
-          {message.meta?.results && (
-            <div className="mt-4 space-y-2 rounded-2xl border border-gray-200 bg-gray-50 p-4">
-              {message.meta.results.map((result) => (
-                <div key={result.id} className="text-sm">
-                  <div className="font-medium text-gray-900">
-                    {result.answered_correctly ? '✅' : '❌'} {result.id}. {result.question}
-                  </div>
-                  <div className="mt-1 text-gray-600">Deine Antwort: {result.selected_option || '—'}</div>
-                  {!result.answered_correctly && (
-                    <div className="text-gray-600">Richtig: {result.correct_option}</div>
-                  )}
-                </div>
-              ))}
+          {message.downloadUrl ? (
+            <div className="mt-4">
+              <a
+                href={message.downloadUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+              >
+                Handout-PDF herunterladen
+              </a>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

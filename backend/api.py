@@ -1,93 +1,109 @@
-from typing import List, Optional
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
-from services.core.api_state_machine import SessionStore
+from services.core.api_state_machine import LearningSession, StepResult
 
 
-app = FastAPI(
-    title="AI Learning Coach API",
-    description="REST API wrapper for the Wikipedia-based adaptive learning state machine.",
-    version="0.1.0",
-)
+app = FastAPI(title="AI Learning Coach API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For local development. Restrict this later in production.
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-store = SessionStore()
+SESSIONS: Dict[str, LearningSession] = {}
 
 
 class StepRequest(BaseModel):
-    message: Optional[str] = Field(
-        default=None,
-        description="Text input for states that expect text, e.g. topic, ja/nein, nochmal/skip.",
-    )
-    answers: Optional[List[int]] = Field(
-        default=None,
-        description="Selected option numbers for quiz evaluation, e.g. [1, 3, 2, 4].",
+    message: Optional[str] = None
+    answers: Optional[List[int]] = None
+
+
+class SessionResponse(BaseModel):
+    session_id: str
+    state_before: str
+    state_after: str
+    message: str
+    requires_input: bool
+    input_kind: Optional[str] = None
+    data: Dict[str, Any]
+    download_url: Optional[str] = None
+    session: Dict[str, Any]
+
+
+def to_response(result: StepResult) -> SessionResponse:
+    return SessionResponse(
+        session_id=result.session_id,
+        state_before=result.state_before,
+        state_after=result.state_after,
+        message=result.message,
+        requires_input=result.requires_input,
+        input_kind=result.input_kind,
+        data=result.data,
+        download_url=result.download_url,
+        session=result.session,
     )
 
 
 @app.get("/health")
-def health():
+def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/sessions")
-def create_session():
-    session = store.create()
-    return {
-        "session_id": session.session_id,
-        "session": session.snapshot(),
-        "next": {
-            "endpoint": f"/sessions/{session.session_id}/step",
-            "method": "POST",
-            "body_example": {"message": "Schwarzes Loch"},
-        },
-    }
-
-
-@app.get("/sessions")
-def list_sessions():
-    return {"sessions": store.list()}
+@app.post("/sessions", response_model=SessionResponse)
+def create_session() -> SessionResponse:
+    session = LearningSession()
+    SESSIONS[session.session_id] = session
+    return to_response(session.initial_response())
 
 
 @app.get("/sessions/{session_id}")
-def get_session(session_id: str):
-    try:
-        session = store.get(session_id)
-    except KeyError:
+def get_session(session_id: str) -> Dict[str, Any]:
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.snapshot()
+
+
+@app.post("/sessions/{session_id}/step", response_model=SessionResponse)
+def step_session(session_id: str, request: StepRequest) -> SessionResponse:
+    session = SESSIONS.get(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return {"session": session.snapshot()}
+    result = session.step(message=request.message, answers=request.answers)
+    return to_response(result)
 
 
-@app.post("/sessions/{session_id}/step")
-def step_session(session_id: str, request: StepRequest):
-    try:
-        session = store.get(session_id)
-    except KeyError:
+@app.get("/sessions/{session_id}/handout.pdf")
+def download_handout(session_id: str) -> FileResponse:
+    session = SESSIONS.get(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    try:
-        return session.step(input_message=request.message, answers=request.answers)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    if session.handout_pdf_path is None:
+        # If the session is already in HANDOUT, generate it now.
+        if session.get_current_state() == "HANDOUT":
+            session.step()
+        else:
+            raise HTTPException(status_code=404, detail="Handout is not ready yet")
 
+    path = Path(session.handout_pdf_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Handout file not found")
 
-@app.delete("/sessions/{session_id}")
-def delete_session(session_id: str):
-    try:
-        store.get(session_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    store.delete(session_id)
-    return {"deleted": True, "session_id": session_id}
+    return FileResponse(
+        path=str(path),
+        media_type="application/pdf",
+        filename=path.name,
+    )

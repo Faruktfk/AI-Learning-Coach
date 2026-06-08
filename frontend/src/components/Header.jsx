@@ -1,32 +1,34 @@
-import { Menu, RotateCcw } from 'lucide-react';
+import { Moon, Sun, MessageSquarePlus } from 'lucide-react';
 
-export default function Header({ session, isBusy, onNewSession }) {
-  const title = session?.article_title || 'AI Learning Coach';
-  const subtitle = session?.current_chunk_title
-    ? `${session.current_state} · Abschnitt ${session.current_chunk_index + 1}/${session.chunk_count}: ${session.current_chunk_title}`
-    : session?.current_state || 'Bereit';
-
+export default function Header({ activeConversation, theme, onToggleTheme, onNewConversation }) {
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4">
-      <div className="flex min-w-0 items-center gap-3">
-        <button className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 md:hidden" aria-label="Menü">
-          <Menu size={20} />
-        </button>
-
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-gray-900">{title}</div>
-          <div className="truncate text-xs text-gray-500">{subtitle}</div>
-        </div>
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="min-w-0">
+        <h1 className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+          {activeConversation?.title || 'AI Learning Coach'}
+        </h1>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          Wikipedia-basierter adaptiver Tutor
+        </p>
       </div>
 
-      <button
-        onClick={onNewSession}
-        disabled={isBusy}
-        className="inline-flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        <RotateCcw size={16} />
-        Neu
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onNewConversation}
+          className="rounded-xl p-2 text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800 md:hidden"
+          title="Neuer Chat"
+        >
+          <MessageSquarePlus size={19} />
+        </button>
+
+        <button
+          onClick={onToggleTheme}
+          className="rounded-xl p-2 text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          title="Theme wechseln"
+        >
+          {theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}
+        </button>
+      </div>
     </header>
   );
 }

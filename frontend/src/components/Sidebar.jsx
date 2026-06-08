@@ -1,82 +1,58 @@
-import { BookOpen, MessageSquarePlus, Trash2 } from 'lucide-react';
+import { MessageSquarePlus, GraduationCap, Trash2 } from 'lucide-react';
 
-function shortSessionTitle(session) {
-  if (session.article_title) return session.article_title;
-  if (session.current_state === 'FETCH') return 'Neue Lerneinheit';
-  return `Session ${session.session_id.slice(0, 8)}`;
-}
-
-export default function Sidebar({ sessions, activeSessionId, onNewSession, onSelectSession, onDeleteSession }) {
+export default function Sidebar({
+  conversations,
+  activeConversationId,
+  onNewConversation,
+  onSelectConversation,
+  onDeleteConversation,
+}) {
   return (
-    <aside className="hidden h-screen w-72 shrink-0 flex-col border-r border-gray-200 bg-gray-50 md:flex">
-      <div className="flex h-16 items-center gap-3 px-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-900 text-white">
-          <BookOpen size={18} />
-        </div>
-        <div>
-          <div className="text-sm font-semibold text-gray-900">AI Learning Coach</div>
-          <div className="text-xs text-gray-500">Wikipedia Tutor</div>
-        </div>
+    <aside className="hidden w-72 shrink-0 border-r border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-950 md:flex md:flex-col">
+      <button
+        onClick={onNewConversation}
+        className="mb-4 flex w-full items-center gap-2 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-left text-sm font-medium text-zinc-900 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+      >
+        <MessageSquarePlus size={18} />
+        Neuer Lern-Chat
+      </button>
+
+      <div className="mb-2 flex items-center gap-2 px-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+        <GraduationCap size={15} />
+        Lernverläufe
       </div>
 
-      <div className="px-3">
-        <button
-          onClick={onNewSession}
-          className="flex w-full items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 shadow-sm transition hover:bg-gray-100"
-        >
-          <MessageSquarePlus size={17} />
-          Neue Lerneinheit
-        </button>
-      </div>
+      <div className="scrollbar-thin flex-1 space-y-1 overflow-y-auto pr-1">
+        {conversations.map((conversation) => {
+          const active = conversation.id === activeConversationId;
 
-      <div className="mt-4 flex-1 overflow-y-auto px-3 pb-4">
-        <div className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-gray-500">
-          Sessions
-        </div>
-
-        <div className="space-y-1">
-          {sessions.length === 0 && (
-            <div className="px-2 py-3 text-sm text-gray-500">Noch keine Sessions.</div>
-          )}
-
-          {sessions.map((session) => {
-            const isActive = session.session_id === activeSessionId;
-
-            return (
-              <div
-                key={session.session_id}
-                className={`group flex items-center gap-2 rounded-xl px-2 py-2 transition ${
-                  isActive ? 'bg-gray-200' : 'hover:bg-gray-100'
-                }`}
+          return (
+            <div
+              key={conversation.id}
+              className={`group flex items-center rounded-xl text-sm transition ${
+                active
+                  ? 'bg-zinc-200 text-zinc-950 dark:bg-zinc-800 dark:text-white'
+                  : 'text-zinc-700 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-900'
+              }`}
+            >
+              <button
+                onClick={() => onSelectConversation(conversation.id)}
+                className="min-w-0 flex-1 truncate px-3 py-2 text-left"
+                title={conversation.title}
               >
-                <button
-                  onClick={() => onSelectSession(session.session_id)}
-                  className="min-w-0 flex-1 text-left"
-                >
-                  <div className="truncate text-sm text-gray-900">{shortSessionTitle(session)}</div>
-                  <div className="truncate text-xs text-gray-500">
-                    {session.current_state}
-                    {session.chunk_count ? ` · ${session.current_chunk_index + 1}/${session.chunk_count}` : ''}
-                  </div>
-                </button>
+                {conversation.title}
+              </button>
 
-                <button
-                  onClick={() => onDeleteSession(session.session_id)}
-                  className="rounded-lg p-1 text-gray-400 opacity-0 transition hover:bg-gray-200 hover:text-gray-700 group-hover:opacity-100"
-                  aria-label="Session löschen"
-                >
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="border-t border-gray-200 p-4 text-xs leading-relaxed text-gray-500">
-        REST API: <span className="font-mono">localhost:8000</span>
-        <br />
-        Frontend: <span className="font-mono">localhost:5173</span>
+              <button
+                onClick={() => onDeleteConversation(conversation.id)}
+                className="mr-1 rounded-lg p-1 text-zinc-500 opacity-0 transition hover:bg-zinc-300 hover:text-red-600 group-hover:opacity-100 dark:hover:bg-zinc-700"
+                title="Chat löschen"
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          );
+        })}
       </div>
     </aside>
   );

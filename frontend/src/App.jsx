@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { createSession, deleteSession, listSessions, stepSession } from './api/learningApi.js';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+import { buildDownloadUrl, createLearningSession, stepLearningSession } from './api/learningApi.js';
 import ChatMessage from './components/ChatMessage.jsx';
 import ChoiceButtons from './components/ChoiceButtons.jsx';
 import Composer from './components/Composer.jsx';
@@ -7,223 +8,307 @@ import EmptyState from './components/EmptyState.jsx';
 import Header from './components/Header.jsx';
 import QuizPanel from './components/QuizPanel.jsx';
 import Sidebar from './components/Sidebar.jsx';
-import { extractAssistantTitle, getInputMode, shouldAutoContinue } from './utils/responseHelpers.js';
+import { createMessage, titleFromFirstUserMessage } from './utils/messages.js';
+import { loadConversations, loadTheme, saveConversations, saveTheme } from './utils/storage.js';
 
-function createAssistantMessage(response) {
+function createConversationFromSession(apiResponse) {
   return {
     id: crypto.randomUUID(),
-    role: 'assistant',
-    title: extractAssistantTitle(response),
-    content: response.message || '',
-    meta: response.data || {},
+    apiSessionId: apiResponse.session_id,
+    title: 'Neuer Lern-Chat',
+    messages: [createMessage('assistant', apiResponse.message, { stream: true })],
+    inputKind: apiResponse.input_kind,
+    pendingData: apiResponse.data || {},
+    backendState: apiResponse.state_after,
+    downloadUrl: buildDownloadUrl(apiResponse.download_url),
+    isLoading: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
 }
 
-function createUserMessage(content) {
-  return {
-    id: crypto.randomUUID(),
-    role: 'user',
-    content,
-  };
+function ThinkingIndicator() {
+  return (
+    <div className="mx-auto flex w-full max-w-3xl gap-4 px-4 py-5">
+      <div className="h-8 w-8 rounded-full bg-emerald-600" />
+      <div className="mt-2 flex gap-1">
+        <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.2s]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.1s]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-400" />
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
-  const [sessions, setSessions] = useState([]);
-  const [activeSessionId, setActiveSessionId] = useState(null);
-  const [activeSession, setActiveSession] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [lastResponse, setLastResponse] = useState(null);
-  const [isBusy, setIsBusy] = useState(false);
-  const [error, setError] = useState(null);
+  const [conversations, setConversations] = useState(() =>
+    loadConversations().map((conversation) => ({
+      ...conversation,
+      messages: conversation.messages.map((message) => ({
+        ...message,
+        stream: false,
+      })),
+    })),
+  );
+  
+  const [activeConversationId, setActiveConversationId] = useState(() => {
+    const loaded = loadConversations();
+    return loaded[0]?.id || null;
+  });
 
-  const messagesEndRef = useRef(null);
-  const autoContinueLockRef = useRef(false);
+  const [theme, setTheme] = useState(() => loadTheme());
+  const scrollRef = useRef(null);
 
-  const inputMode = getInputMode(lastResponse);
-  const quizQuestions = lastResponse?.input_kind === 'quiz_answers' ? lastResponse?.data?.questions || [] : [];
-
-  const refreshSessions = useCallback(async () => {
-    const data = await listSessions();
-    setSessions(data.sessions || []);
-  }, []);
-
-  const appendAssistantResponse = useCallback((response) => {
-    setMessages((current) => [...current, createAssistantMessage(response)]);
-    setLastResponse(response);
-    setActiveSession(response.session);
-  }, []);
-
-  const executeStep = useCallback(
-    async (payload = {}, options = {}) => {
-      if (!activeSessionId) return null;
-
-      const { showUserMessage } = options;
-      setError(null);
-      setIsBusy(true);
-
-      if (showUserMessage) {
-        setMessages((current) => [...current, createUserMessage(showUserMessage)]);
-      }
-
-      try {
-        const response = await stepSession(activeSessionId, payload);
-        appendAssistantResponse(response);
-        await refreshSessions();
-        return response;
-      } catch (err) {
-        setError(err.message || 'Unbekannter Fehler');
-        return null;
-      } finally {
-        setIsBusy(false);
-      }
-    },
-    [activeSessionId, appendAssistantResponse, refreshSessions]
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId) || null,
+    [conversations, activeConversationId],
   );
 
-  const startNewSession = useCallback(async () => {
-    setError(null);
-    setIsBusy(true);
-    autoContinueLockRef.current = false;
+  useEffect(() => {
+    saveConversations(conversations);
+  }, [conversations]);
 
-    try {
-      const created = await createSession();
-      setActiveSessionId(created.session_id);
-      setActiveSession(created.session);
-      setMessages([]);
-      setLastResponse(null);
-      await refreshSessions();
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    saveTheme(theme);
+  }, [theme]);
 
-      const firstResponse = await stepSession(created.session_id, {});
-      appendAssistantResponse(firstResponse);
-      await refreshSessions();
-    } catch (err) {
-      setError(err.message || 'Session konnte nicht erstellt werden');
-    } finally {
-      setIsBusy(false);
+  useEffect(() => {
+    if (conversations.length === 0) {
+      handleNewConversation();
     }
-  }, [appendAssistantResponse, refreshSessions]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
-    startNewSession();
-  }, [startNewSession]);
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: 'smooth',
+    });
+  }, [activeConversation?.messages?.length, activeConversation?.isLoading]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isBusy]);
+  function updateConversation(conversationId, updater) {
+    setConversations((current) =>
+      current.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
 
-  useEffect(() => {
-    if (!lastResponse || !activeSessionId) return;
-    if (!shouldAutoContinue(lastResponse)) return;
-    if (autoContinueLockRef.current) return;
+        const updated = updater(conversation);
+        return {
+          ...updated,
+          updatedAt: new Date().toISOString(),
+        };
+      }),
+    );
+  }
 
-    autoContinueLockRef.current = true;
+  async function handleNewConversation() {
+    try {
+      const apiResponse = await createLearningSession();
+      const newConversation = createConversationFromSession(apiResponse);
+      setConversations((current) => [newConversation, ...current]);
+      setActiveConversationId(newConversation.id);
+    } catch (error) {
+      const offlineConversation = {
+        id: crypto.randomUUID(),
+        apiSessionId: null,
+        title: 'Backend nicht erreichbar',
+        messages: [
+          createMessage(
+            'assistant',
+            `Backend konnte nicht erreicht werden. Starte FastAPI mit: uvicorn api:app --reload\n\nFehler: ${error.message}`,
+            { stream: true },
+          ),
+        ],
+        inputKind: null,
+        pendingData: {},
+        backendState: null,
+        isLoading: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setConversations((current) => [offlineConversation, ...current]);
+      setActiveConversationId(offlineConversation.id);
+    }
+  }
 
-    const timerId = window.setTimeout(async () => {
-      await executeStep({});
-      autoContinueLockRef.current = false;
-    }, 350);
+  function handleSelectConversation(conversationId) {
+    setConversations((current) =>
+      current.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
 
-    return () => {
-      window.clearTimeout(timerId);
-      autoContinueLockRef.current = false;
+        return {
+          ...conversation,
+          messages: conversation.messages.map((message) => ({
+            ...message,
+            stream: false,
+          })),
+        };
+      }),
+    );
+
+    setActiveConversationId(conversationId);
+  }
+
+  function handleDeleteConversation(conversationId) {
+    setConversations((current) => {
+      const remaining = current.filter((conversation) => conversation.id !== conversationId);
+
+      if (conversationId === activeConversationId) {
+        setActiveConversationId(remaining[0]?.id || null);
+      }
+
+      return remaining;
+    });
+  }
+
+  function appendAssistantResponse(conversation, apiResponse) {
+    const downloadUrl = buildDownloadUrl(apiResponse.download_url);
+    const assistantMessage = createMessage('assistant', apiResponse.message, {
+      stream: true,
+      downloadUrl,
+    });
+
+    const nextMessages = [...conversation.messages, assistantMessage];
+
+    return {
+      ...conversation,
+      messages: nextMessages,
+      inputKind: apiResponse.input_kind,
+      pendingData: apiResponse.data || {},
+      backendState: apiResponse.state_after,
+      downloadUrl,
+      title: titleFromFirstUserMessage(nextMessages),
     };
-  }, [lastResponse, activeSessionId, executeStep]);
-
-  async function handleSubmitText(text) {
-    await executeStep({ message: text }, { showUserMessage: text });
   }
 
-  async function handleChoose(value, label) {
-    await executeStep({ message: value }, { showUserMessage: label });
-  }
+  async function sendStep(conversationId, payload = {}, visibleUserMessage = null, isAutoStep = false) {
+    const conversation = conversations.find((item) => item.id === conversationId);
+    if (!conversation?.apiSessionId) return;
 
-  async function handleSubmitAnswers(answers) {
-    const humanReadable = answers.map((answer, index) => `${index + 1}. ${answer}`).join('\n');
-    await executeStep({ answers }, { showUserMessage: humanReadable });
-  }
-
-  async function handleSelectSession(sessionId) {
-    // The API stores session state, but not chat history. For this MVP frontend,
-    // selecting a session restores the state snapshot and asks the API for the next expected action.
-    setActiveSessionId(sessionId);
-    setMessages([]);
-    setLastResponse(null);
-    setError(null);
-    setIsBusy(true);
+    if (visibleUserMessage) {
+      updateConversation(conversationId, (current) => {
+        const nextMessages = [...current.messages, createMessage('user', visibleUserMessage)];
+        return {
+          ...current,
+          messages: nextMessages,
+          title: titleFromFirstUserMessage(nextMessages),
+          isLoading: true,
+          inputKind: null,
+          pendingData: {},
+        };
+      });
+    } else {
+      updateConversation(conversationId, (current) => ({
+        ...current,
+        isLoading: true,
+        inputKind: null,
+      }));
+    }
 
     try {
-      const response = await stepSession(sessionId, {});
-      appendAssistantResponse(response);
-      await refreshSessions();
-    } catch (err) {
-      setError(err.message || 'Session konnte nicht geladen werden');
-    } finally {
-      setIsBusy(false);
+      const apiResponse = await stepLearningSession(conversation.apiSessionId, payload);
+
+      updateConversation(conversationId, (current) => ({
+        ...appendAssistantResponse(current, apiResponse),
+        isLoading: !apiResponse.requires_input && apiResponse.state_after !== 'FINISHED',
+      }));
+
+      if (!apiResponse.requires_input && apiResponse.state_after !== 'FINISHED') {
+        window.setTimeout(() => {
+          sendStep(conversationId, {}, null, true);
+        }, isAutoStep ? 250 : 500);
+      }
+    } catch (error) {
+      updateConversation(conversationId, (current) => ({
+        ...current,
+        messages: [
+          ...current.messages,
+          createMessage('assistant', `Fehler: ${error.message}`, { stream: true }),
+        ],
+        isLoading: false,
+        inputKind: current.inputKind || 'topic',
+      }));
     }
   }
 
-  async function handleDeleteSession(sessionId) {
-    await deleteSession(sessionId);
-    await refreshSessions();
-
-    if (sessionId === activeSessionId) {
-      await startNewSession();
-    }
+  function handleSubmitText(text) {
+    if (!activeConversation) return;
+    sendStep(activeConversation.id, { message: text }, text);
   }
 
-  const showEmptyState = messages.length === 0 && !isBusy;
+  function handleChoice(value) {
+    if (!activeConversation) return;
+    const label = value === 'ja' ? 'Ja' : value === 'nein' ? 'Nein' : value === 'nochmal' ? 'Nochmal' : 'Skip';
+    sendStep(activeConversation.id, { message: value }, label);
+  }
+
+  function handleQuizComplete(answers) {
+    if (!activeConversation) return;
+    const visibleAnswer = `Antworten: ${answers.map((answer) => answer ?? '-').join(', ')}`;
+    sendStep(activeConversation.id, { answers }, visibleAnswer);
+  }
+
+  const inputKind = activeConversation?.inputKind;
+  const isLoading = activeConversation?.isLoading || false;
+  const quizQuestions = activeConversation?.pendingData?.questions || [];
 
   return (
-    <div className="flex h-screen overflow-hidden bg-white text-gray-900">
+    <div className="flex h-full bg-white text-zinc-950 dark:bg-zinc-900 dark:text-zinc-100">
       <Sidebar
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        onNewSession={startNewSession}
-        onSelectSession={handleSelectSession}
-        onDeleteSession={handleDeleteSession}
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        onNewConversation={handleNewConversation}
+        onSelectConversation={handleSelectConversation}
+        onDeleteConversation={handleDeleteConversation}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
-        <Header session={activeSession} isBusy={isBusy} onNewSession={startNewSession} />
+        <Header
+          activeConversation={activeConversation}
+          theme={theme}
+          onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+          onNewConversation={handleNewConversation}
+        />
 
-        <section className="min-h-0 flex-1 overflow-y-auto bg-white">
-          {showEmptyState ? (
+        <section ref={scrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto bg-white dark:bg-zinc-900">
+          {!activeConversation || activeConversation.messages.length === 0 ? (
             <EmptyState />
           ) : (
             <>
-              {messages.map((message) => (
-                <ChatMessage key={message.id} message={message} />
+              {activeConversation.messages.map((message) => (
+                 <ChatMessage
+                    key={message.id}
+                    message={message}
+                    onAnimationDone={() => {
+                      updateConversation(activeConversation.id, (current) => ({
+                        ...current,
+                        messages: current.messages.map((item) =>
+                          item.id === message.id ? { ...item, stream: false } : item,
+                        ),
+                      }));
+                    }}
+                  />
               ))}
-
-              {isBusy && (
-                <div className="flex w-full gap-4 bg-white px-4 py-6">
-                  <div className="mx-auto flex w-full max-w-3xl gap-4">
-                    <div className="mt-1 h-8 w-8 shrink-0 rounded-full bg-gray-900" />
-                    <div className="flex items-center gap-1 pt-2 text-gray-500">
-                      <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.2s]" />
-                      <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.1s]" />
-                      <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400" />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {error && (
-                <div className="mx-auto max-w-3xl px-4 py-4">
-                  <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                    {error}
-                  </div>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
+              {isLoading ? <ThinkingIndicator /> : null}
             </>
           )}
         </section>
 
-        <ChoiceButtons mode={inputMode} disabled={isBusy} onChoose={handleChoose} />
-        <QuizPanel questions={quizQuestions} disabled={isBusy} onSubmitAnswers={handleSubmitAnswers} />
-        <Composer mode={inputMode} disabled={isBusy} onSubmitText={handleSubmitText} />
+        {inputKind === 'topic' ? (
+          <Composer
+            disabled={isLoading}
+            placeholder="Thema eingeben, z.B. Schwarzes Loch..."
+            onSubmit={handleSubmitText}
+          />
+        ) : null}
+
+        {inputKind === 'start_test_decision' || inputKind === 'adapt_decision' ? (
+          <ChoiceButtons kind={inputKind} disabled={isLoading} onChoose={handleChoice} />
+        ) : null}
+
+        {inputKind === 'quiz_answers' ? (
+          <QuizPanel questions={quizQuestions} disabled={isLoading} onComplete={handleQuizComplete} />
+        ) : null}
       </main>
     </div>
   );

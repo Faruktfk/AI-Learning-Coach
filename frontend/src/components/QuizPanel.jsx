@@ -1,74 +1,70 @@
 import { useMemo, useState } from 'react';
 
-export default function QuizPanel({ questions, disabled, onSubmitAnswers }) {
+export default function QuizPanel({ questions, disabled, onComplete }) {
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState({});
 
-  const allAnswered = useMemo(() => {
-    if (!questions?.length) return false;
-    return questions.every((question) => answers[question.id]);
-  }, [answers, questions]);
+  const currentQuestion = questions?.[currentIndex];
+  const total = questions?.length || 0;
+  const progressLabel = total > 0 ? `${currentIndex + 1} / ${total}` : '0 / 0';
 
-  if (!questions?.length) return null;
+  const chosenAnswerList = useMemo(() => {
+    return Array.from({ length: total }, (_, index) => answers[index + 1] || null);
+  }, [answers, total]);
 
-  function choose(questionId, optionId) {
-    if (disabled) return;
-    setAnswers((current) => ({ ...current, [questionId]: optionId }));
+  if (!currentQuestion) {
+    return null;
   }
 
-  function submit() {
-    if (!allAnswered || disabled) return;
-    const orderedAnswers = questions.map((question) => answers[question.id]);
-    onSubmitAnswers(orderedAnswers);
-    setAnswers({});
+  function choose(optionId) {
+    if (disabled) return;
+
+    const nextAnswers = {
+      ...answers,
+      [currentQuestion.id]: optionId,
+    };
+    setAnswers(nextAnswers);
+
+    if (currentIndex >= total - 1) {
+      const finalAnswers = Array.from({ length: total }, (_, index) => nextAnswers[index + 1] || null);
+      onComplete(finalAnswers);
+      return;
+    }
+
+    setCurrentIndex((value) => value + 1);
   }
 
   return (
-    <div className="border-t border-gray-200 bg-white px-4 py-4">
-      <div className="mx-auto max-w-3xl space-y-4">
-        <div className="rounded-3xl border border-gray-200 bg-gray-50 p-4 shadow-sm">
-          <div className="mb-4 text-sm font-semibold text-gray-900">Wähle pro Frage eine Antwort aus.</div>
+    <div className="border-t border-zinc-200 bg-white px-4 py-4 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="mx-auto max-w-3xl rounded-3xl border border-zinc-200 bg-zinc-50 p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="mb-3 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+          <span>Frage {progressLabel}</span>
+          <span>{Object.keys(answers).length} beantwortet</span>
+        </div>
 
-          <div className="space-y-5">
-            {questions.map((question) => (
-              <div key={question.id} className="rounded-2xl border border-gray-200 bg-white p-4">
-                <div className="mb-3 text-sm font-semibold text-gray-900">
-                  {question.id}. {question.question}
-                </div>
+        <div className="mb-4 h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+          <div
+            className="h-full rounded-full bg-emerald-600 transition-all"
+            style={{ width: `${((currentIndex + 1) / total) * 100}%` }}
+          />
+        </div>
 
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {question.options.map((option) => {
-                    const selected = answers[question.id] === option.id;
+        <h3 className="mb-4 text-base font-semibold leading-7 text-zinc-950 dark:text-white">
+          {currentQuestion.question}
+        </h3>
 
-                    return (
-                      <button
-                        key={option.id}
-                        onClick={() => choose(question.id, option.id)}
-                        disabled={disabled}
-                        className={`rounded-xl border px-3 py-2 text-left text-sm transition ${
-                          selected
-                            ? 'border-gray-900 bg-gray-900 text-white'
-                            : 'border-gray-200 bg-white text-gray-800 hover:bg-gray-100'
-                        } disabled:cursor-not-allowed disabled:opacity-60`}
-                      >
-                        <span className="mr-2 font-semibold">{option.id}.</span>
-                        {option.text}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-4 flex justify-end">
+        <div className="grid gap-2">
+          {currentQuestion.options.map((option) => (
             <button
-              onClick={submit}
-              disabled={!allAnswered || disabled}
-              className="rounded-2xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+              key={option.id}
+              disabled={disabled}
+              onClick={() => choose(option.id)}
+              className="rounded-2xl border border-zinc-300 bg-white px-4 py-3 text-left text-sm leading-6 text-zinc-900 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
             >
-              Antworten absenden
+              <span className="mr-2 font-semibold">{option.id}.</span>
+              {option.text}
             </button>
-          </div>
+          ))}
         </div>
       </div>
     </div>

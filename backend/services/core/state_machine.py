@@ -16,8 +16,6 @@ CHUNK_QUESTIONS = None
 
 CHUNK_TEST_TRIES = 0
 
-HANDOUT_CONTENT = []
-
 def get_current_state():
     return STATES[STATE_INDEX]
 
@@ -108,9 +106,6 @@ def run_state_machine(input_message=None):
             )
             LESSON_CONTENT["sections"][CURRENT_CHUNK_INDEX]['summary'] = chunk_summary
 
-            # Add to handout content, if no point of focus (i.e. first time through the chunk)
-            if point_of_focus is None:
-                HANDOUT_CONTENT.append({"title": LESSON_CONTENT["sections"][CURRENT_CHUNK_INDEX]['title'], "summary": chunk_summary})
             
             # Change to CHECK state
             STATE_INDEX += 1
