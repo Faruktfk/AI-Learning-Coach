@@ -1,6 +1,7 @@
 import random
 
-from tools import ollama_client, wiki_fetcher
+from services.tools import ollama_client
+from services.tools import wiki_fetcher
 
 
 STATES = ["FETCH", "TEACH", "CHECK", "EVAL", "ADAPT", "HANDOUT"]
@@ -14,6 +15,8 @@ CURRENT_CHUNK_INDEX = 0
 CHUNK_QUESTIONS = None
 
 CHUNK_TEST_TRIES = 0
+
+HANDOUT_CONTENT = []
 
 def get_current_state():
     return STATES[STATE_INDEX]
@@ -91,7 +94,7 @@ def run_state_machine(input_message=None):
             # Focus on failed questions
             point_of_focus = None
             if CHUNK_QUESTIONS is not None:
-                questions = ', '.join([item['question'] for item in CHUNK_QUESTIONS])
+                questions = ', '.join([item.question for item in CHUNK_QUESTIONS])
                 point_of_focus = [{"role": "user", "content": f"In der nächsten Zusammenfassung sollst du dich auf die folgenden Fragen konzentrieren: [{questions}]. Wenn du die folgenden Informationen zusammenfasst, versuche besonders die Informationen hervorzuheben, die für die Beantwortung dieser Fragen relevant sind."}]
 
 
@@ -105,6 +108,9 @@ def run_state_machine(input_message=None):
             )
             LESSON_CONTENT["sections"][CURRENT_CHUNK_INDEX]['summary'] = chunk_summary
 
+            # Add to handout content, if no point of focus (i.e. first time through the chunk)
+            if point_of_focus is None:
+                HANDOUT_CONTENT.append({"title": LESSON_CONTENT["sections"][CURRENT_CHUNK_INDEX]['title'], "summary": chunk_summary})
             
             # Change to CHECK state
             STATE_INDEX += 1
@@ -142,7 +148,7 @@ def run_state_machine(input_message=None):
     
     elif current_state == "EVAL":
         # USER INPUT/OUTPUT -> Answers and Questions
-        print("\n\n\n", "="*10, f" TEST: {CURRENT_CHUNK_INDEX + 1}. {LESSON_CONTENT['sections'][CURRENT_CHUNK_INDEX]['title'].upper()} -- {len(CHUNK_QUESTIONS)} Fragen -- {CHUNK_QUESTIONS}. Try ", "="*10, "\n")
+        print("\n\n\n", "="*10, f" TEST: {CURRENT_CHUNK_INDEX + 1}. {LESSON_CONTENT['sections'][CURRENT_CHUNK_INDEX]['title'].upper()} -- {len(CHUNK_QUESTIONS)} Fragen -- {CHUNK_TEST_TRIES}. Try ", "="*10, "\n")
         for i, q in enumerate(CHUNK_QUESTIONS):
             print(f"\nFrage {i+1}: {q.question}\n")
             options = [q.true_option, q.distraction_option_1, q.distraction_option_2, q.distraction_option_3]
@@ -186,13 +192,13 @@ def run_state_machine(input_message=None):
             else:    
                 print("Es scheint, dass du Schwierigkeiten mit diesem Abschnitt hast. Es ist in Ordnung.")
                 user_input = input("Möchtest du den Abschnitt nochmals versuchen oder zum nächsten Abschnitt übergehen? (nochmal/skip) \n\n > ")
-                if user_input.lower() == 'nochmals':
-                    print(f"\n\nOkay, lass es uns nochmals durchgehen. \n\n")
-                else:
+                if user_input.lower() == 'skip':
                     print(f"\n\nOkay, lass uns zum nächsten Abschnitt übergehen. \n\n")
                     CHUNK_TEST_TRIES = 0
                     CHUNK_QUESTIONS = None
                     CURRENT_CHUNK_INDEX += 1
+                else:
+                    print(f"\n\nOkay, lass es uns nochmals durchgehen. \n\n")
 
         else:
             print(f"\n\nGut gemacht! Lass uns zum nächsten Abschnitt übergehen. \n\n")

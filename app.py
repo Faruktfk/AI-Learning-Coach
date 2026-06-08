@@ -1,4 +1,4 @@
-from core import state_machine
+from services.core import state_machine
 
 while True:
 
