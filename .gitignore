@@ -32,3 +32,5 @@ dist/
 
 # Logs
 logs/
+
+# package-lock.json
