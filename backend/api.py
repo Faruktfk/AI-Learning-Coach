@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from services.tools.handout_pdf import HANDOUT_DIR
 from services.core.api_state_machine import LearningSession, StepResult
 
 
@@ -85,25 +86,43 @@ def step_session(session_id: str, request: StepRequest) -> SessionResponse:
     return to_response(result)
 
 
-@app.get("/sessions/{session_id}/handout.pdf")
-def download_handout(session_id: str) -> FileResponse:
+@app.post("/sessions/{session_id}/handout", response_model=SessionResponse)
+def generate_handout_for_session(session_id: str) -> SessionResponse:
     session = SESSIONS.get(session_id)
+
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if session.handout_pdf_path is None:
-        # If the session is already in HANDOUT, generate it now.
-        if session.get_current_state() == "HANDOUT":
-            session.step()
-        else:
-            raise HTTPException(status_code=404, detail="Handout is not ready yet")
+    result = session.generate_handout_now()
+    return to_response(result)
 
-    path = Path(session.handout_pdf_path)
-    if not path.exists():
+
+@app.get("/handouts/{filename}")
+def download_handout_file(filename: str):
+    """
+    Downloads a generated handout PDF by filename.
+
+    Important:
+    This endpoint does NOT depend on the in-memory session store.
+    If the PDF exists on disk, it can be downloaded.
+    """
+
+    # Prevent path traversal like ../../secret.txt
+    safe_name = Path(filename).name
+
+    if safe_name != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    file_path = HANDOUT_DIR / safe_name
+
+    if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Handout file not found")
 
+    if file_path.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files can be downloaded")
+
     return FileResponse(
-        path=str(path),
+        path=str(file_path),
         media_type="application/pdf",
-        filename=path.name,
+        filename=safe_name,
     )

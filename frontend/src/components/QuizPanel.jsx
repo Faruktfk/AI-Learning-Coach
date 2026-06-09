@@ -83,7 +83,7 @@ export default function QuizPanel({ questions, disabled, onComplete }) {
   }
 
   return (
-    <div className="border-t border-zinc-200 bg-white px-4 py-4 dark:border-zinc-950 dark:bg-black">
+    <div className="border-t border-zinc-200 bg-white px-4 py-4 dark:border-zinc-800 dark:bg-black">
       <div className="mx-auto max-w-3xl rounded-3xl border border-zinc-200 bg-zinc-50 p-4 shadow-sm dark:border-zinc-800 dark:bg-[#050505]">
         <div className="mb-3 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
           <span>Frage {progressLabel}</span>

@@ -24,8 +24,9 @@ from reportlab.platypus import (
 )
 
 
-HANDOUT_DIR = Path("generated_handouts")
-HANDOUT_DIR.mkdir(exist_ok=True)
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+HANDOUT_DIR = BACKEND_ROOT / "generated_handouts"
+HANDOUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def safe_filename(value: str) -> str:

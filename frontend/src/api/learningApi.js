@@ -33,6 +33,33 @@ export async function stepLearningSession(sessionId, payload = {}) {
 
 export function buildDownloadUrl(downloadUrl) {
   if (!downloadUrl) return null;
-  if (downloadUrl.startsWith('http')) return downloadUrl;
-  return `${API_BASE_URL}${downloadUrl}`;
+
+  if (
+    downloadUrl.startsWith('http://') ||
+    downloadUrl.startsWith('https://')
+  ) {
+    return downloadUrl;
+  }
+
+  const normalizedBaseUrl = API_BASE_URL.replace(/\/+$/, '');
+  const normalizedPath = downloadUrl.startsWith('/')
+    ? downloadUrl
+    : `/${downloadUrl}`;
+
+  return `${normalizedBaseUrl}${normalizedPath}`;
+}
+
+export async function generateLearningHandout(sessionId) {
+  const normalizedBaseUrl = API_BASE_URL.replace(/\/+$/, '');
+
+  const response = await fetch(`${normalizedBaseUrl}/sessions/${sessionId}/handout`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Handout konnte nicht generiert werden.');
+  }
+
+  return response.json();
 }

@@ -49,3 +49,21 @@ body {
 .markdown-body > :last-child {
   margin-bottom: 0;
 }
+
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animate-\[gradientShift_2\.8s_ease_infinite\] {
+  background-size: 220% 220%;
+}

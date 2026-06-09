@@ -10,7 +10,7 @@ export default function ChoiceButtons({ kind, disabled, onChoose }) {
       ];
 
   return (
-    <div className="border-t border-zinc-200 bg-white px-4 py-4 dark:border-zinc-950 dark:bg-black">
+    <div className="border-t border-zinc-200 bg-white px-4 py-4 dark:border-zinc-800 dark:bg-black">
       <div className="mx-auto flex max-w-3xl flex-wrap gap-3">
         {options.map((option) => (
           <button

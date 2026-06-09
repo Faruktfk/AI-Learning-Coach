@@ -13,7 +13,7 @@ export default function Composer({ disabled, placeholder, onSubmit }) {
   }
 
   return (
-    <div className="border-t border-zinc-200 bg-white px-4 py-4 dark:border-zinc-950 dark:bg-black">
+    <div className="border-t border-zinc-200 bg-white px-4 py-4 dark:border-zinc-800 dark:bg-black">
       <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-zinc-300 bg-white p-2 shadow-sm dark:border-zinc-800 dark:bg-[#101010]">
         <textarea
           value={value}

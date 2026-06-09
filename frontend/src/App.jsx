@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { buildDownloadUrl, createLearningSession, stepLearningSession } from './api/learningApi.js';
+import { buildDownloadUrl, createLearningSession, stepLearningSession, generateLearningHandout } from './api/learningApi.js';
 import ChatMessage from './components/ChatMessage.jsx';
 import ChoiceButtons from './components/ChoiceButtons.jsx';
 import Composer from './components/Composer.jsx';
@@ -8,6 +8,7 @@ import EmptyState from './components/EmptyState.jsx';
 import Header from './components/Header.jsx';
 import QuizPanel from './components/QuizPanel.jsx';
 import Sidebar from './components/Sidebar.jsx';
+import LearningProgress from './components/LearningProgress.jsx';
 import { createMessage, titleFromFirstUserMessage } from './utils/messages.js';
 import { loadConversations, loadSidebarCollapsed, loadTheme, saveConversations, saveSidebarCollapsed, saveTheme } from './utils/storage.js';
 
@@ -19,6 +20,7 @@ function createConversationFromSession(apiResponse) {
     messages: [createMessage('assistant', apiResponse.message, { stream: true })],
     inputKind: apiResponse.input_kind,
     pendingData: apiResponse.data || {},
+    articleSections: [],
     backendState: apiResponse.state_after,
     downloadUrl: buildDownloadUrl(apiResponse.download_url),
     isLoading: false,
@@ -44,6 +46,7 @@ export default function App() {
   const [conversations, setConversations] = useState(() =>
     loadConversations().map((conversation) => ({
       ...conversation,
+      articleSections: conversation.articleSections || [],
       messages: conversation.messages.map((message) => ({
         ...message,
         stream: false,
@@ -58,6 +61,7 @@ export default function App() {
 
   const [theme, setTheme] = useState(() => loadTheme());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
+  const [learningProgressOpen, setLearningProgressOpen] = useState(true);
   const scrollRef = useRef(null);
 
   const activeConversation = useMemo(
@@ -168,37 +172,57 @@ export default function App() {
 
       return;
     }
-
-    // Wenn die letzte Konversation gelöscht wird:
-    // Erst alles leeren, dann sauber über die vorhandene Logik
-    // eine neue Backend-Session + neue Konversation erstellen.
     setConversations([]);
     setActiveConversationId(null);
 
     await handleNewConversation();
   }
 
-  function appendAssistantResponse(conversation, apiResponse) {
-    const downloadUrl = buildDownloadUrl(apiResponse.download_url);
-    const assistantMessage = createMessage('assistant', apiResponse.message, {
-      stream: true,
-      downloadUrl,
-    });
+function appendAssistantResponse(conversation, apiResponse) {
+  const downloadUrl = buildDownloadUrl(apiResponse.download_url);
 
-    const nextMessages = [...conversation.messages, assistantMessage];
+  const messageMeta = {};
 
-    const resolvedTopicTitle = apiResponse.data?.resolved_topic?.trim();
-
-    return {
-      ...conversation,
-      messages: nextMessages,
-      inputKind: apiResponse.input_kind,
-      pendingData: apiResponse.data || {},
-      backendState: apiResponse.state_after,
-      downloadUrl,
-      title: resolvedTopicTitle || conversation.title,
-    };
+  if (
+    typeof apiResponse.data?.chunk_index === 'number' &&
+    apiResponse.data?.chunk_title &&
+    apiResponse.data?.summary
+  ) {
+    messageMeta.progressType = 'section';
+    messageMeta.chunkIndex = apiResponse.data.chunk_index;
+    messageMeta.chunkTitle = apiResponse.data.chunk_title;
   }
+
+  if (apiResponse.state_after === 'FINISHED') {
+    messageMeta.progressType = 'handout';
+  }
+
+  const assistantMessage = createMessage('assistant', apiResponse.message, {
+    stream: true,
+    downloadUrl,
+    ...messageMeta,
+  });
+
+  const nextMessages = [...conversation.messages, assistantMessage];
+
+  const resolvedTopicTitle = apiResponse.data?.resolved_topic?.trim();
+
+  const articleSections = Array.isArray(apiResponse.data?.chunk_titles)
+    ? apiResponse.data.chunk_titles
+    : conversation.articleSections || [];
+
+  return {
+    ...conversation,
+    messages: nextMessages,
+    inputKind: apiResponse.input_kind,
+    pendingData: apiResponse.data || {},
+    articleSections,
+    backendState: apiResponse.state_after,
+    downloadUrl: downloadUrl || conversation.downloadUrl,
+    handoutGenerated: Boolean(downloadUrl) || conversation.handoutGenerated,
+    title: resolvedTopicTitle || conversation.title,
+  };
+}
 
   async function sendStep(conversationId, payload = {}, visibleUserMessage = null, isAutoStep = false) {
     const conversation = conversations.find((item) => item.id === conversationId);
@@ -206,16 +230,18 @@ export default function App() {
 
     if (visibleUserMessage) {
       updateConversation(conversationId, (current) => {
-        const nextMessages = [...current.messages, createMessage('user', visibleUserMessage)];
+        const userMessageMeta = current.inputKind === 'topic' ? { progressType: 'prompt' } : {};
+        const nextMessages = [...current.messages, createMessage('user', visibleUserMessage, userMessageMeta)];
         return {
-          ...current,
-          messages: nextMessages,
-          title: current.title,
-          isLoading: true,
-          inputKind: null,
-          pendingData: {},
-        };
-      });
+            ...current,
+            messages: nextMessages,
+            title: current.title,
+            isLoading: true,
+            inputKind: null,
+            pendingData: {},
+          };
+        }
+      );
     } else {
       updateConversation(conversationId, (current) => ({
         ...current,
@@ -267,12 +293,84 @@ export default function App() {
     sendStep(activeConversation.id, { answers }, visibleAnswer);
   }
 
+  async function handleGenerateHandout() {
+    if (!activeConversation?.apiSessionId) return;
+
+    const conversationId = activeConversation.id;
+
+    const previousInputKind = activeConversation.inputKind;
+    const previousPendingData = activeConversation.pendingData || {};
+
+    updateConversation(conversationId, (current) => ({
+      ...current,
+      isLoading: true,
+      inputKind: null,
+    }));
+
+    try {
+      const apiResponse = await generateLearningHandout(activeConversation.apiSessionId);
+      const downloadUrl = buildDownloadUrl(apiResponse.download_url);
+
+      updateConversation(conversationId, (current) => {
+        const assistantMessage = createMessage('assistant', apiResponse.message, {
+          stream: true,
+          downloadUrl,
+          progressType: 'early_handout',
+        });
+
+        return {
+          ...current,
+          messages: [...current.messages, assistantMessage],
+          isLoading: false,
+
+          // Important:
+          // The user should continue exactly where they were before.
+          inputKind: previousInputKind,
+          pendingData: previousPendingData,
+
+          downloadUrl: downloadUrl || current.downloadUrl,
+          handoutGenerated: Boolean(downloadUrl) || current.handoutGenerated,
+        };
+      });
+    } catch (error) {
+      updateConversation(conversationId, (current) => ({
+        ...current,
+        messages: [
+          ...current.messages,
+          createMessage('assistant', `Fehler beim Generieren des Handouts: ${error.message}`, {
+            stream: true,
+          }),
+        ],
+        isLoading: false,
+        inputKind: previousInputKind,
+        pendingData: previousPendingData,
+      }));
+    }
+  }
+
   const inputKind = activeConversation?.inputKind;
   const isLoading = activeConversation?.isLoading || false;
   const quizQuestions = activeConversation?.pendingData?.questions || [];
 
+  const isInQuiz = inputKind === 'quiz_answers';
+  const handoutDownloadUrl = activeConversation?.downloadUrl || null;
+  const handoutAlreadyGenerated = Boolean(handoutDownloadUrl);
+
+  const hasLoadedArticle =
+    Array.isArray(activeConversation?.articleSections) &&
+    activeConversation.articleSections.length > 0;
+
+  const isFinished = activeConversation?.backendState === 'FINISHED';
+
+  const canGenerateHandout =
+    hasLoadedArticle &&
+    !isFinished &&
+    !handoutAlreadyGenerated &&
+    !isLoading &&
+    !isInQuiz;
+
   return (
-    <div className="flex h-full bg-white text-zinc-950 dark:bg-black dark:text-zinc-100">
+    <div className="flex h-screen overflow-hidden bg-white text-zinc-950 dark:bg-black dark:text-zinc-100">
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
@@ -285,10 +383,14 @@ export default function App() {
         onDeleteConversation={handleDeleteConversation}
       />
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header
           activeConversation={activeConversation}
           onNewConversation={handleNewConversation}
+          learningProgressOpen={learningProgressOpen}
+          onToggleLearningProgress={() =>
+            setLearningProgressOpen((current) => !current)
+          }
         />
 
         <section ref={scrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto bg-white dark:bg-black">
@@ -297,8 +399,8 @@ export default function App() {
           ) : (
             <>
               {activeConversation.messages.map((message) => (
+                <div key={message.id} id={`message-${message.id}`}>
                  <ChatMessage
-                    key={message.id}
                     message={message}
                     onAnimationDone={() => {
                       updateConversation(activeConversation.id, (current) => ({
@@ -309,11 +411,24 @@ export default function App() {
                       }));
                     }}
                   />
+                </div>
               ))}
               {isLoading ? <ThinkingIndicator /> : null}
             </>
           )}
         </section>
+       
+        {learningProgressOpen ? (
+          <LearningProgress
+            conversation={activeConversation}
+            scrollContainerRef={scrollRef}
+            canGenerateHandout={canGenerateHandout}
+            handoutDownloadUrl={handoutDownloadUrl}
+            handoutAlreadyGenerated={handoutAlreadyGenerated}
+            isFinished={isFinished}
+            onGenerateHandout={handleGenerateHandout}
+          />
+        ) : null}
 
         {inputKind === 'topic' ? (
           <Composer

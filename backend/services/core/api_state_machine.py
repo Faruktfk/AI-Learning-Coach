@@ -198,7 +198,7 @@ class LearningSession:
             self.state_index = STATES.index("HANDOUT")
             return self._result(
                 state_before=state_before,
-                message="Alle Abschnitte des Artikels wurden durchgearbeitet.",
+                message="Alle Abschnitte des Artikels wurden durchgearbeitet. Handout wird vorbereitet.",
             )
 
         point_of_focus = None
@@ -234,8 +234,10 @@ class LearningSession:
         self.state_index = STATES.index("CHECK")
         return self._result(
             state_before=state_before,
-            message=f"{self.current_chunk_index + 1}. {section['title'].upper()}\n\n{chunk_summary}",
-            data={
+        message=(
+            f"## Abschnitt {self.current_chunk_index + 1}: {section['title']}\n\n"
+            f"{chunk_summary}"
+        ),            data={
                 "chunk_index": self.current_chunk_index,
                 "chunk_title": section["title"],
                 "summary": chunk_summary,
@@ -468,6 +470,60 @@ class LearningSession:
             message="Gut gemacht! Lass uns zum nächsten Abschnitt übergehen.",
         )
 
+    def generate_handout_now(self) -> StepResult:
+        """
+        Generates the handout without changing the learning state.
+
+        Important:
+        - This does NOT move the session to FINISHED.
+        - If the PDF already exists, it is reused.
+        - This is used by the frontend's LearningProgress button.
+        """
+        state_before = self.get_current_state()
+
+        if self.lesson_content is None:
+            return self._result(
+                state_before=state_before,
+                message="Es gibt noch keinen geladenen Artikel. Bitte starte zuerst mit einem Thema.",
+                requires_input=True,
+                input_kind="topic",
+            )
+
+        if self.handout_pdf_path is None:
+            self.handout_text = self._generate_handout_text()
+            self.handout_pdf_path = build_handout_filename(
+                self.session_id,
+                self.lesson_content["title"],
+            )
+            create_one_page_handout_pdf(
+                title=self.lesson_content["title"],
+                handout_text=self.handout_text,
+                output_path=self.handout_pdf_path,
+            )
+
+            message = (
+                "## Handout-PDF wurde generiert\n\n"
+                "Du kannst das Handout jetzt herunterladen. "
+                "Du kannst den Lernprozess trotzdem normal fortsetzen."
+            )
+        else:
+            message = (
+                "## Handout-PDF ist bereits vorhanden\n\n"
+                "Das Handout wurde schon generiert. "
+                "Du kannst die vorhandene PDF-Datei herunterladen."
+            )
+
+        return self._result(
+            state_before=state_before,
+            message=message,
+            data={
+                "handout_text": self.handout_text,
+                "handout_ready": True,
+                "generated_early": True,
+            },
+            download_url=self._download_url(),
+        )
+
     def _handle_handout(self) -> StepResult:
         state_before = "HANDOUT"
 
@@ -475,9 +531,14 @@ class LearningSession:
             self.state_index = STATES.index("FETCH")
             return self.initial_response()
 
+        already_generated = self.handout_pdf_path is not None
+
         if self.handout_pdf_path is None:
             self.handout_text = self._generate_handout_text()
-            self.handout_pdf_path = build_handout_filename(self.session_id, self.lesson_content["title"])
+            self.handout_pdf_path = build_handout_filename(
+                self.session_id,
+                self.lesson_content["title"],
+            )
             create_one_page_handout_pdf(
                 title=self.lesson_content["title"],
                 handout_text=self.handout_text,
@@ -485,26 +546,53 @@ class LearningSession:
             )
 
         self.state_index = STATES.index("FINISHED")
-        return self._result(
-            state_before=state_before,
-            message=(
+
+        if already_generated:
+            message = (
+                "HERZLICHEN GLÜCKWUNSCH! DU HAST ALLE ABSCHNITTE DURCHGEARBEITET!\n\n"
+                "Dein Handout wurde bereits vorher generiert. "
+                "Du kannst die vorhandene PDF-Datei herunterladen."
+            )
+        else:
+            message = (
                 "HERZLICHEN GLÜCKWUNSCH! DU HAST ALLE ABSCHNITTE DURCHGEARBEITET!\n\n"
                 "Dein Handout wurde als PDF generiert und steht jetzt zum Download bereit."
-            ),
-            data={"handout_text": self.handout_text},
+            )
+
+        return self._result(
+            state_before=state_before,
+            message=message,
+            data={
+                "handout_text": self.handout_text,
+                "handout_ready": True,
+                "already_generated": already_generated,
+            },
             download_url=self._download_url(),
         )
 
     def _generate_handout_text(self) -> str:
         assert self.lesson_content is not None
 
-        summaries = []
-        for section in self.lesson_content["sections"]:
-            summary = section.get("summary")
-            if summary:
-                summaries.append(f"## {section['title']}\n{summary}")
+        section_blocks = []
 
-        source_text = "\n\n".join(summaries)
+        for section in self.lesson_content["sections"]:
+            title = section.get("title", "Abschnitt")
+            summary = section.get("summary")
+            content = section.get("content", "")
+
+            if summary and summary.strip():
+                section_blocks.append(
+                    f"## {title}\n"
+                    f"{summary.strip()}"
+                )
+            else:
+                cleaned_content = " ".join(content.split())
+                section_blocks.append(
+                    f"## {title}\n"
+                    f"{cleaned_content[:1200]}"
+                )
+
+        source_text = "\n\n".join(section_blocks)
 
         if not source_text.strip():
             source_text = "\n\n".join(
@@ -515,19 +603,25 @@ class LearningSession:
         try:
             handout, _ = ollama_client.llm_chat(
                 system_prompt="""
-                Du bist ein hilfreicher Lernassistent.
-                Erstelle ein kompaktes Lern-Handout auf Deutsch.
+                    Du bist ein hilfreicher Lernassistent.
+                    Erstelle ein kompaktes Lern-Handout auf Deutsch.
 
-                Regeln:
-                - Gib ausschließlich Markdown zurück.
-                - Keine Markdown-Code-Fences um den gesamten Text.
-                - Maximal ungefähr eine Seite Inhalt.
-                - Verwende klare Überschriften.
-                - Verwende Bulletpoints für wichtige Fakten.
-                - Verwende fettgedruckte Begriffe für zentrale Konzepte.
-                - Verwende kurze Absätze.
-                - Verwende keine HTML-Tags.
-                - Verwende keine Quellenliste, keine Weblinks, keine Literaturangaben.
+                    Wichtig:
+                    - Das Handout soll den gesamten Artikel abdecken, nicht nur bereits bearbeitete Abschnitte.
+                    - Manche Abschnitte enthalten bereits didaktische Zusammenfassungen.
+                    - Andere Abschnitte enthalten noch Originaltext aus dem Artikel.
+                    - Verdichte alles zu einem einheitlichen, gut lernbaren Handout.
+
+                    Regeln:
+                    - Gib ausschließlich Markdown zurück.
+                    - Keine Markdown-Code-Fences um den gesamten Text.
+                    - Maximal ungefähr eine Seite Inhalt.
+                    - Verwende klare Überschriften.
+                    - Verwende Bulletpoints für wichtige Fakten.
+                    - Verwende fettgedruckte Begriffe für zentrale Konzepte.
+                    - Verwende kurze Absätze.
+                    - Verwende keine HTML-Tags.
+                    - Verwende keine Quellenliste, keine Weblinks, keine Literaturangaben.
                 """,
                 message=(
                     f"Artikel: {self.lesson_content['title']}\n\n"
@@ -595,7 +689,7 @@ class LearningSession:
     def _download_url(self) -> Optional[str]:
         if self.handout_pdf_path is None:
             return None
-        return f"/sessions/{self.session_id}/handout.pdf"
+        return  f"/handouts/{self.handout_pdf_path.name}"
 
     def _result(
         self,

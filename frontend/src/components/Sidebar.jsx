@@ -34,7 +34,7 @@ export default function Sidebar({
 
   if (collapsed) {
     return (
-      <aside className="flex h-screen w-[56px] shrink-0 flex-col items-center border-r border-zinc-200 bg-zinc-50 px-2 py-3 dark:border-zinc-950 dark:bg-black">
+      <aside className="flex h-screen w-[56px] shrink-0 flex-col items-center border-r border-zinc-200 bg-zinc-50 px-2 py-3 dark:border-zinc-800 dark:bg-black">
         {/* Logo / Expand Button */}
         <button
           onClick={onToggleCollapsed}
@@ -97,7 +97,7 @@ export default function Sidebar({
   }
 
   return (
-    <aside className="flex h-screen w-[290px] shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 px-3 py-3 dark:border-zinc-950 dark:bg-black">
+    <aside className="flex h-screen w-[290px] shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 px-3 py-3 dark:border-zinc-800 dark:bg-black">
       {/* Top Brand Row */}
       <div className="flex items-center justify-between px-2 py-1">
         <div className="flex min-w-0 items-center">
