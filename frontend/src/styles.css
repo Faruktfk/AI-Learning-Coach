@@ -22,7 +22,7 @@ body {
 }
 
 .dark body {
-  background: #212121;
+  background: #000000;
 }
 
 * {
@@ -40,4 +40,12 @@ body {
 .scrollbar-thin::-webkit-scrollbar-thumb {
   background: rgba(120, 120, 120, 0.35);
   border-radius: 999px;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
 }

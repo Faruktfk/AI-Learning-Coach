@@ -12,6 +12,10 @@ from services.tools.handout_pdf import build_handout_filename, create_one_page_h
 
 STATES = ["FETCH", "TEACH", "CHECK", "EVAL", "ADAPT", "HANDOUT", "FINISHED"]
 
+# The backend is intentionally kept as ONE readable session class.
+# Each _handle_* method corresponds directly to one state of the learning flow.
+# FastAPI only calls LearningSession.step(...); the class decides the next state.
+
 
 @dataclass
 class StepResult:
@@ -359,8 +363,27 @@ class LearningSession:
 
         return self._result(
             state_before=state_before,
-            message=f"Du hast {correct_count} von {total} Fragen richtig beantwortet. ({correct_percentage:.2%})",
+            message=self._format_test_feedback(self.last_score),
             data=self.last_score,
+        )
+
+    def _format_test_feedback(self, score: Dict[str, Any]) -> str:
+        correct_count = score["correct_count"]
+        total = score["total"]
+        wrong_count = total - correct_count
+        correct_percentage = score["correct_percentage"]
+
+        if wrong_count == 0:
+            return (
+                "## Test abgeschlossen\n\n"
+                f"Sehr gut! Du hast **{correct_count} von {total}** Fragen richtig beantwortet."
+            )
+
+        return (
+            "## Test abgeschlossen\n\n"
+            f"Du hast **{correct_count} von {total}** Fragen richtig beantwortet. "
+            f"**{wrong_count}** Frage(n) waren falsch. "
+            f"Gesamtergebnis: **{correct_percentage:.0%}**."
         )
 
     def _handle_adapt(self, message: Optional[str]) -> StepResult:
@@ -491,12 +514,21 @@ class LearningSession:
 
         try:
             handout, _ = ollama_client.llm_chat(
-                system_prompt=(
-                    "Du bist ein hilfreicher Lernassistent. Erstelle ein kompaktes, gut strukturiertes Lern-Handout "
-                    "auf Deutsch. Das Handout soll maximal eine PDF-Seite lang sein. Nutze kurze Überschriften und "
-                    "Bulletpoints. Konzentriere dich auf die wichtigsten Begriffe, Zusammenhänge und Merksätze. "
-                    "Gib nur den Handout-Text zurück, ohne Zusatzkommentar."
-                ),
+                system_prompt="""
+                Du bist ein hilfreicher Lernassistent.
+                Erstelle ein kompaktes Lern-Handout auf Deutsch.
+
+                Regeln:
+                - Gib ausschließlich Markdown zurück.
+                - Keine Markdown-Code-Fences um den gesamten Text.
+                - Maximal ungefähr eine Seite Inhalt.
+                - Verwende klare Überschriften.
+                - Verwende Bulletpoints für wichtige Fakten.
+                - Verwende fettgedruckte Begriffe für zentrale Konzepte.
+                - Verwende kurze Absätze.
+                - Verwende keine HTML-Tags.
+                - Verwende keine Quellenliste, keine Weblinks, keine Literaturangaben.
+                """,
                 message=(
                     f"Artikel: {self.lesson_content['title']}\n\n"
                     f"Zusammenfassungen der bearbeiteten Abschnitte:\n\n{source_text}"
@@ -520,22 +552,34 @@ class LearningSession:
         payload = []
 
         for index, question in enumerate(self.chunk_questions or [], start=1):
-            options = [
+            option_texts = [
                 question.true_option,
                 question.distraction_option_1,
                 question.distraction_option_2,
                 question.distraction_option_3,
             ]
-            random.shuffle(options)
+
+            random.shuffle(option_texts)
+
+            options = [
+                {"id": option_index, "text": option_text}
+                for option_index, option_text in enumerate(option_texts, start=1)
+            ]
+
+            correct_option_id = None
+            for option in options:
+                if option["text"] == question.true_option:
+                    correct_option_id = option["id"]
+                    break
 
             payload.append(
                 {
                     "id": index,
                     "question": question.question,
-                    "options": [
-                        {"id": option_index, "text": option_text}
-                        for option_index, option_text in enumerate(options, start=1)
-                    ],
+                    "options": options,
+
+                    # Needed by the frontend so it can instantly color answers.
+                    "correct_option_id": correct_option_id,
                 }
             )
 

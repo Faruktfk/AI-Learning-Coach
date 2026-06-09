@@ -10,9 +10,9 @@ export function createMessage(role, content, extra = {}) {
 
 export function titleFromFirstUserMessage(messages) {
   const firstUserMessage = messages.find((message) => message.role === 'user');
-  if (!firstUserMessage) return 'Neuer Lern-Chat';
+  if (!firstUserMessage) return 'Neuer Chat';
 
   const compact = firstUserMessage.content.replace(/\s+/g, ' ').trim();
-  if (!compact) return 'Neuer Lern-Chat';
+  if (!compact) return 'Neuer Chat';
   return compact.length > 34 ? `${compact.slice(0, 34)}...` : compact;
 }

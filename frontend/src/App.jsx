@@ -9,13 +9,13 @@ import Header from './components/Header.jsx';
 import QuizPanel from './components/QuizPanel.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import { createMessage, titleFromFirstUserMessage } from './utils/messages.js';
-import { loadConversations, loadTheme, saveConversations, saveTheme } from './utils/storage.js';
+import { loadConversations, loadSidebarCollapsed, loadTheme, saveConversations, saveSidebarCollapsed, saveTheme } from './utils/storage.js';
 
 function createConversationFromSession(apiResponse) {
   return {
     id: crypto.randomUUID(),
     apiSessionId: apiResponse.session_id,
-    title: 'Neuer Lern-Chat',
+    title: 'Neuer Chat',
     messages: [createMessage('assistant', apiResponse.message, { stream: true })],
     inputKind: apiResponse.input_kind,
     pendingData: apiResponse.data || {},
@@ -57,6 +57,7 @@ export default function App() {
   });
 
   const [theme, setTheme] = useState(() => loadTheme());
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => loadSidebarCollapsed());
   const scrollRef = useRef(null);
 
   const activeConversation = useMemo(
@@ -72,6 +73,10 @@ export default function App() {
     document.documentElement.classList.toggle('dark', theme === 'dark');
     saveTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    saveSidebarCollapsed(sidebarCollapsed);
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     if (conversations.length === 0) {
@@ -149,16 +154,28 @@ export default function App() {
     setActiveConversationId(conversationId);
   }
 
-  function handleDeleteConversation(conversationId) {
-    setConversations((current) => {
-      const remaining = current.filter((conversation) => conversation.id !== conversationId);
+  async function handleDeleteConversation(conversationId) {
+    const remaining = conversations.filter(
+      (conversation) => conversation.id !== conversationId,
+    );
+
+    if (remaining.length > 0) {
+      setConversations(remaining);
 
       if (conversationId === activeConversationId) {
-        setActiveConversationId(remaining[0]?.id || null);
+        setActiveConversationId(remaining[0].id);
       }
 
-      return remaining;
-    });
+      return;
+    }
+
+    // Wenn die letzte Konversation gelöscht wird:
+    // Erst alles leeren, dann sauber über die vorhandene Logik
+    // eine neue Backend-Session + neue Konversation erstellen.
+    setConversations([]);
+    setActiveConversationId(null);
+
+    await handleNewConversation();
   }
 
   function appendAssistantResponse(conversation, apiResponse) {
@@ -170,6 +187,8 @@ export default function App() {
 
     const nextMessages = [...conversation.messages, assistantMessage];
 
+    const resolvedTopicTitle = apiResponse.data?.resolved_topic?.trim();
+
     return {
       ...conversation,
       messages: nextMessages,
@@ -177,7 +196,7 @@ export default function App() {
       pendingData: apiResponse.data || {},
       backendState: apiResponse.state_after,
       downloadUrl,
-      title: titleFromFirstUserMessage(nextMessages),
+      title: resolvedTopicTitle || conversation.title,
     };
   }
 
@@ -191,7 +210,7 @@ export default function App() {
         return {
           ...current,
           messages: nextMessages,
-          title: titleFromFirstUserMessage(nextMessages),
+          title: current.title,
           isLoading: true,
           inputKind: null,
           pendingData: {},
@@ -253,11 +272,15 @@ export default function App() {
   const quizQuestions = activeConversation?.pendingData?.questions || [];
 
   return (
-    <div className="flex h-full bg-white text-zinc-950 dark:bg-zinc-900 dark:text-zinc-100">
+    <div className="flex h-full bg-white text-zinc-950 dark:bg-black dark:text-zinc-100">
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
-        onNewConversation={handleNewConversation}
+        collapsed={sidebarCollapsed}
+        theme={theme}
+        onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
+        onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+        onCreateConversation={handleNewConversation}
         onSelectConversation={handleSelectConversation}
         onDeleteConversation={handleDeleteConversation}
       />
@@ -265,12 +288,10 @@ export default function App() {
       <main className="flex min-w-0 flex-1 flex-col">
         <Header
           activeConversation={activeConversation}
-          theme={theme}
-          onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
           onNewConversation={handleNewConversation}
         />
 
-        <section ref={scrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto bg-white dark:bg-zinc-900">
+        <section ref={scrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto bg-white dark:bg-black">
           {!activeConversation || activeConversation.messages.length === 0 ? (
             <EmptyState />
           ) : (
