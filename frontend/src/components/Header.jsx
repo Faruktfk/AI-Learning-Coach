@@ -11,7 +11,7 @@ export default function Header({ activeConversation, onNewConversation, learning
 
       <button
         onClick={onToggleLearningProgress}
-        className="flex h-9 w-9 items-center justify-center rounded-xl text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900 hidden lg:block"
+        className="hidden lg:flex h-9 w-9 items-center justify-center rounded-xl text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
         title={
           learningProgressOpen
             ? 'Fortschritt ausblenden'
