@@ -46,7 +46,7 @@ def llm_chat(message, system_prompt=None, history=None, question_format_on=False
         options={
             'temperature': 0 if question_format_on else 0.2,
             'num_ctx': 4096 if is_handout_generation else 2048,
-            'num_predict': 900 if is_handout_generation else 700,
+            'num_predict': 1100 if is_handout_generation else 900,
         }
     )
 

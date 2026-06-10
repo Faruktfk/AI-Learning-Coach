@@ -281,25 +281,49 @@ class LearningSession:
             )
 
         section = self.lesson_content["sections"][self.current_chunk_index]
-        self.chunk_questions, _ = ollama_client.llm_chat(
-            system_prompt=(
-                "Du bist ein hilfreicher Lernassistent, der basierend auf den folgenden Informationen 3 bis 5 "
-                "Multiple-Choice-Fragen generiert, um das Verständnis eines Schülers zu überprüfen. Generiere Fragen, "
-                "die sich auf die wichtigsten Punkte der Informationen konzentrieren und das Verständnis des Schülers testen. "
-                "DU DARFST KEINE ERKLÄRUNGEN ODER ZUSÄTZLICHEN INFORMATIONEN GEBEN. DU SOLLST DIE FRAGEN IN FOLGENDEN "
-                "FORMAT GENERIEREN: JEDES FRAGE-ANTWORT-SET SOLL EIN DICT SEIN, DAS DIE FOLGENDEN FELDER ENTHÄLT: "
-                "'question' (die Frage), 'true_option' (die richtige Antwortoption), 'distraction_option_1' (eine einzigartige falsche "
-                "Antwortoption), 'distraction_option_2' (eine einzigartige falsche Antwortoption) und 'distraction_option_3' (eine einzigartige falsche "
-                "Antwortoption). GIB NUR DIE FRAGEN IM ANGEGEBENEN JSON-FORMAT ZURÜCK, OHNE ZUSÄTZLICHE ERKLÄRUNGEN "
-                "ODER INFORMATIONEN. SEHR WICHTIG:"
-                "- Frage nur Inhalte ab, die exakt in der Zusammenfassung stehen."
-                "- Die richtige Antwort muss wörtlich oder sinngemäß in der Zusammenfassung enthalten sein."
-                "- Erfinde keine zusätzlichen Fakten."
-            ),
-            message=section["summary"],
-            question_format_on=True,
-            print_response=False,
-        )
+        try:
+            self.chunk_questions, _ = ollama_client.llm_chat(
+                system_prompt=(
+                    "Du bist ein Lernassistent.\n\n"
+                    "Erstelle mindestens 3 maximal 5 Multiple-Choice-Fragen zur gegebenen Zusammenfassung.\n\n"
+                    "Strenge Regeln:\n"
+                    "- Nutze ausschließlich Informationen aus der Zusammenfassung.\n"
+                    "- Erfinde keine Fakten.\n"
+                    "- Jede Frage braucht genau eine richtige Antwort und drei falsche Antwortoptionen.\n"
+                    "- Die falschen Optionen müssen plausibel, aber eindeutig falsch sein.\n"
+                    "- Antworte ausschließlich im geforderten JSON-Format.\n"
+                    "- Kein Markdown.\n"
+                    "- Kein Text außerhalb des JSON.\n\n"
+                    "Jedes Fragen-Objekt muss diese Felder haben:\n"
+                    "- question\n"
+                    "- true_option\n"
+                    "- distraction_option_1\n"
+                    "- distraction_option_2\n"
+                    "- distraction_option_3\n"
+                    "Dabei ist 'true_option' die richtige Antwort, die anderen drei Felder sind falsche Antworten.\n\n"
+                    "Alle Optionen einer Frage müssen inhaltlich anders sein.\n"
+                    "Keine Option darf leer sein.\n"
+                ),
+                message=section["summary"],
+                question_format_on=True,
+                print_response=False,
+            )
+        except Exception as exc:
+            self.state_index = STATES.index("CHECK")
+            return self._result(
+                state_before=state_before,
+                message=(
+                    "Beim Generieren der Testfragen ist ein Fehler aufgetreten. "
+                    "Das Modell hat kein gültiges JSON erzeugt.\n\n"
+                    "Bitte versuche den Test erneut zu starten."
+                ),
+                requires_input=True,
+                input_kind="start_test_decision",
+                data={
+                    "options": ["ja", "nein"],
+                    "error": str(exc),
+                },
+            )
 
         self.latest_question_payload = self._build_question_payload()
         self.state_index = STATES.index("EVAL")
