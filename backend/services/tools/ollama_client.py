@@ -1,3 +1,4 @@
+import os
 from ollama import Client
 from pydantic import BaseModel
 
@@ -14,14 +15,14 @@ class Chunk_Test(BaseModel):
     questions: list[Chunk_Question]
 
 
+OLLAMA_HOST = os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434"
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL") or "llama3.2:3b"
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "600"))  # Default to 600 seconds (10 minutes)
 
-HOST = "http://localhost:11434"
-MODEL = "llama3.2:3b"
-# MODEL = "llama3.1:8b"
-CLIENT = Client(host=HOST)
+CLIENT = Client(host=OLLAMA_HOST, timeout=OLLAMA_TIMEOUT)
 
 
-def llm_chat(message, system_prompt=None, history=None, question_format_on=False, print_response=True):
+def llm_chat(message, system_prompt=None, history=None, question_format_on=False, print_response=True, is_handout_generation=False):
     if history is None:
         history = []
 
@@ -35,13 +36,18 @@ def llm_chat(message, system_prompt=None, history=None, question_format_on=False
 
    
     response = CLIENT.chat(
-        model=MODEL,
+        model=OLLAMA_MODEL,
+        keep_alive="60m",
         messages=messages + [
             {'role': 'user', 'content': message},
         ],
         stream=True,
         format=Chunk_Test.model_json_schema() if question_format_on else None,
-        options={'temperature': 0} if question_format_on else None
+        options={
+            'temperature': 0 if question_format_on else 0.2,
+            'num_ctx': 4096 if is_handout_generation else 2048,
+            'num_predict': 900 if is_handout_generation else 700,
+        }
     )
 
     response_content = ""

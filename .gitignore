@@ -13,6 +13,7 @@ __pycache__/
 
 # Environment variables
 .env
+.env.production
 
 # Operating system files
 .DS_Store
@@ -34,3 +35,4 @@ dist/
 logs/
 
 # package-lock.json
+package-lock.json

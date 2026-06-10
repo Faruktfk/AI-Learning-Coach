@@ -273,13 +273,13 @@ class LearningSession:
         section = self.lesson_content["sections"][self.current_chunk_index]
         self.chunk_questions, _ = ollama_client.llm_chat(
             system_prompt=(
-                "Du bist ein hilfreicher Lernassistent, der basierend auf den folgenden Informationen 3 bis 8 "
+                "Du bist ein hilfreicher Lernassistent, der basierend auf den folgenden Informationen 3 bis 5 "
                 "Multiple-Choice-Fragen generiert, um das Verständnis eines Schülers zu überprüfen. Generiere Fragen, "
                 "die sich auf die wichtigsten Punkte der Informationen konzentrieren und das Verständnis des Schülers testen. "
                 "DU DARFST KEINE ERKLÄRUNGEN ODER ZUSÄTZLICHEN INFORMATIONEN GEBEN. DU SOLLST DIE FRAGEN IN FOLGENDEN "
                 "FORMAT GENERIEREN: JEDES FRAGE-ANTWORT-SET SOLL EIN DICT SEIN, DAS DIE FOLGENDEN FELDER ENTHÄLT: "
-                "'question' (die Frage), 'true_option' (die richtige Antwortoption), 'distraction_option_1' (eine falsche "
-                "Antwortoption), 'distraction_option_2' (eine falsche Antwortoption) und 'distraction_option_3' (eine falsche "
+                "'question' (die Frage), 'true_option' (die richtige Antwortoption), 'distraction_option_1' (eine einzigartige falsche "
+                "Antwortoption), 'distraction_option_2' (eine einzigartige falsche Antwortoption) und 'distraction_option_3' (eine einzigartige falsche "
                 "Antwortoption). GIB NUR DIE FRAGEN IM ANGEGEBENEN JSON-FORMAT ZURÜCK, OHNE ZUSÄTZLICHE ERKLÄRUNGEN "
                 "ODER INFORMATIONEN."
             ),
@@ -628,6 +628,7 @@ class LearningSession:
                     f"Zusammenfassungen der bearbeiteten Abschnitte:\n\n{source_text}"
                 ),
                 print_response=False,
+                is_handout_generation=True,
             )
             return handout.strip()
         except Exception:
