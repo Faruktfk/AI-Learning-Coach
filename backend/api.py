@@ -12,7 +12,7 @@ from services.tools.handout_pdf import HANDOUT_DIR
 from services.core.api_state_machine import LearningSession, StepResult
 
 
-app = FastAPI(title="AI Learning Coach API", version="1.0.0", root_path="/api/v1")
+app = FastAPI(title="MyWikiGPT API", version="1.0.0", root_path="/api/v1")
 
 app.add_middleware(
     CORSMiddleware,

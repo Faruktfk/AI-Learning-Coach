@@ -218,12 +218,22 @@ class LearningSession:
         section = self.lesson_content["sections"][self.current_chunk_index]
         chunk_summary, _ = ollama_client.llm_chat(
             system_prompt=(
-                "Du bist ein hilfreicher Lernassistent, der die folgenden Informationen in einfachen Worten zusammenfasst, "
-                "damit ein Schüler sie verstehen kann. Fasse die folgenden Informationen zusammen:\n\n{message}\n\n"
-                "Gib nur die Zusammenfassung zurück, ohne zusätzliche Erklärungen oder Informationen. DU DARFST KEINE "
-                "ERKLÄRUNGEN ODER ZUSÄTZLICHEN INFORMATIONEN GEBEN, NUR DIE ZUSAMMENFASSUNG DER WICHTIGSTEN PUNKTE "
-                "DER INFORMATIONEN, DIE IN EINFACHEN WORTEN FORMULIERT IST, DAMIT EIN SCHÜLER SIE VERSTEHEN KANN. "
-                "DIE LÄNGE DER ZUSAMMENFASSUNG SOLL MINIMAL 10 UND MAXIMAL 20 SÄTZE BETRAGEN."
+                "Du bist ein vorsichtiger Lernassistent.\n\n"
+                "Aufgabe:\n"
+                "Erstelle eine einfache, gut verständliche Zusammenfassung NUR auf Basis des gegebenen Textes.\n\n"
+                "Strenge Regeln:\n"
+                "- Verwende ausschließlich Informationen, die im gegebenen Text vorkommen.\n"
+                "- Erfinde keine Fakten, Beispiele, Zahlen, Namen, Ursachen oder Erklärungen.\n"
+                "- Wenn eine Information im Text nicht eindeutig steht, erwähne sie nicht.\n"
+                "- Formuliere einfacher, aber bleibe inhaltlich beim Originaltext.\n"
+                "- Keine zusätzlichen Hintergrundinformationen.\n"
+                "- Keine eigenen Schlussfolgerungen.\n"
+                "- Keine Quellen, keine Weblinks, keine Literaturangaben.\n\n"
+                "Format:\n"
+                "- Schreibe auf Deutsch.\n"
+                "- Nutze Markdown.\n"
+                "- Starte mit 3 bis 6 Bulletpoints unter der Überschrift '**Wichtigste Punkte:**'.\n"
+                "- Danach schreibe eine kurze Erklärung mit maximal 8 Sätzen.\n"
             ),
             message=section["content"],
             history=point_of_focus,
@@ -281,7 +291,10 @@ class LearningSession:
                 "'question' (die Frage), 'true_option' (die richtige Antwortoption), 'distraction_option_1' (eine einzigartige falsche "
                 "Antwortoption), 'distraction_option_2' (eine einzigartige falsche Antwortoption) und 'distraction_option_3' (eine einzigartige falsche "
                 "Antwortoption). GIB NUR DIE FRAGEN IM ANGEGEBENEN JSON-FORMAT ZURÜCK, OHNE ZUSÄTZLICHE ERKLÄRUNGEN "
-                "ODER INFORMATIONEN."
+                "ODER INFORMATIONEN. SEHR WICHTIG:"
+                "- Frage nur Inhalte ab, die exakt in der Zusammenfassung stehen."
+                "- Die richtige Antwort muss wörtlich oder sinngemäß in der Zusammenfassung enthalten sein."
+                "- Erfinde keine zusätzlichen Fakten."
             ),
             message=section["summary"],
             question_format_on=True,

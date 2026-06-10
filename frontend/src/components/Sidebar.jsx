@@ -43,7 +43,7 @@ export default function Sidebar({
         >
           <img
             src={faviconSrc}
-            alt="AI Learning Coach"
+            alt="MyWikiGPT"
             className="h-7 w-7 object-contain transition group-hover:hidden"
           />
 
@@ -102,7 +102,7 @@ export default function Sidebar({
       <div className="flex items-center justify-between px-2 py-1">
         <div className="flex min-w-0 items-center">
         <h1 className="truncate font-serif text-[22px] font-semibold tracking-tight text-zinc-950 dark:text-white">
-          AI Learning Coach
+          MyWikiGPT
         </h1>
       </div>
 

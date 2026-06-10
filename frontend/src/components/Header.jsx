@@ -5,7 +5,7 @@ export default function Header({ activeConversation, onNewConversation, learning
     <header className="flex h-11 shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-3 dark:border-zinc-800 dark:bg-black">
       <div className="min-w-0">
         <h1 className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-          {activeConversation?.title || 'AI Learning Coach'}
+          {activeConversation?.title || 'MyWikiGPT'}
         </h1>
       </div>
 

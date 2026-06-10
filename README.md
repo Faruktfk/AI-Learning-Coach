@@ -1,6 +1,6 @@
-# AI Learning Coach
+# AI Learning Coach - MyWikiGPT
 
-AI Learning Coach ist ein Wikipedia-basierter Lernassistent mit einem FastAPI-Backend und einem React/Tailwind-Frontend. Die Anwendung führt Lernende schrittweise durch einen Wikipedia-Artikel: Thema eingeben, Artikel laden, Abschnitt erklären, Test durchführen, Ergebnis auswerten, adaptiv wiederholen oder fortfahren und am Ende ein PDF-Handout herunterladen.
+AI Learning Coach - MyWikiGPT ist ein Wikipedia-basierter Lernassistent mit einem FastAPI-Backend und einem React/Tailwind-Frontend. Die Anwendung führt Lernende schrittweise durch einen Wikipedia-Artikel: Thema eingeben, Artikel laden, Abschnitt erklären, Test durchführen, Ergebnis auswerten, adaptiv wiederholen oder fortfahren und am Ende ein PDF-Handout herunterladen.
 
 ## Kernidee
 

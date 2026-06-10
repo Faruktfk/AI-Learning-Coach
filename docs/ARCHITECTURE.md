@@ -2,7 +2,7 @@
 
 ## Überblick
 
-AI Learning Coach besteht aus zwei Hauptteilen:
+AI Learning Coach - MyWikiGPT besteht aus zwei Hauptteilen:
 
 ```text
 Frontend: React + TailwindCSS

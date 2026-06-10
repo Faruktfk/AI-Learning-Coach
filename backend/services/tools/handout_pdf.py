@@ -341,7 +341,7 @@ def create_one_page_handout_pdf(
         topMargin=14 * mm,
         bottomMargin=14 * mm,
         title=f"Handout - {title}",
-        author="AI Learning Coach",
+        author="MyWikiGPT",
     )
 
     story = [
